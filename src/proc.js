@@ -10,7 +10,9 @@ let seq = 0;
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker(path.join(__dirname, 'spawner.js'));
+  // 打包後程式碼在 app.asar 裡；worker 的入口檔放在 app.asar.unpacked（見 package.json asarUnpack）
+  const file = path.join(__dirname, 'spawner.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  worker = new Worker(file);
   worker.unref();
   worker.on('message', msg => {
     const p = procs.get(msg.id);

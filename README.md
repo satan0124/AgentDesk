@@ -10,10 +10,17 @@ A desktop chat app that puts several command-line coding agents in one window. T
 
 ## Requirements
 - Windows 10 / 11
-- [Node.js](https://nodejs.org/) 18 or later (to install and launch)
+- [Node.js](https://nodejs.org/) 18 or later (only when running from source)
 - [Claude Code](https://code.claude.com/docs/en/setup) (required); Codex CLI and Cursor Agent CLI are optional. Missing CLIs can be installed and signed in from the Settings page.
 
-## Install and run
+## Download
+Get the latest build from [Releases](https://github.com/satan0124/AgentDesk/releases/latest):
+- `AgentDesk-Setup-<version>.exe`: installer (per-user, adds Start menu and desktop shortcuts)
+- `AgentDesk-<version>-portable.exe`: portable, no install needed
+
+The builds are not code-signed yet, so Windows SmartScreen may warn on first launch: click **More info** → **Run anyway**. Node.js is not needed for these builds; you still need the agent CLIs (see below).
+
+## Run from source
 ```bash
 git clone https://github.com/satan0124/AgentDesk.git
 cd AgentDesk
@@ -52,6 +59,13 @@ Agents read and write files and run commands in the chat's working folder. Defau
 - `src/shared/i18n.js`: UI translations.
 - `src/renderer/`: the UI.
 - `tools/make-icon.js`: builds the icon from `build/icon.svg`.
+
+## Building the installer
+```bash
+npm install
+npm run dist
+```
+Output goes to `dist/`. If the build fails with "Cannot create symbolic link" while extracting `winCodeSign`, either enable Windows Developer Mode, or extract that archive yourself into `%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0` while skipping its `darwin` folder.
 
 ## License
 [MIT](LICENSE)

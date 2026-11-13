@@ -4,21 +4,53 @@
   "version": "0.1.0",
   "description": "A desktop chat app that runs Claude Code, Codex CLI, Cursor Agent CLI and custom CLI agents side by side",
   "main": "src/main.js",
+  "author": "satan0124",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/satan0124/AgentDesk.git"
   },
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win nsis portable --publish never"
   },
   "dependencies": {
     "marked": "15.0.12"
   },
   "devDependencies": {
-    "electron": "38.2.0"
+    "electron": "38.2.0",
+    "electron-builder": "26.0.12"
   },
   "allowScripts": {
     "electron@38.2.0": true
+  },
+  "build": {
+    "appId": "io.github.satan0124.agentdesk",
+    "productName": "AgentDesk",
+    "copyright": "Copyright © 2026 satan0124",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": [
+      "src/**/*",
+      "build/icon.ico",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asarUnpack": ["src/spawner.js"],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": ["nsis", "portable"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AgentDesk",
+      "artifactName": "AgentDesk-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "AgentDesk-${version}-portable.${ext}"
+    }
   }
 }

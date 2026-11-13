@@ -10,10 +10,17 @@
 
 ## 需求
 - Windows 10／11
-- [Node.js](https://nodejs.org/) 18 以上（用來安裝與啟動）
+- [Node.js](https://nodejs.org/) 18 以上（只有從原始碼執行才需要）
 - [Claude Code](https://code.claude.com/docs/en/setup)（必要）；Codex CLI、Cursor Agent CLI 可選。沒裝也沒關係，設定頁可以一鍵安裝與登入。
 
-## 安裝與啟動
+## 下載
+到 [Releases](https://github.com/satan0124/AgentDesk/releases/latest) 下載最新版：
+- `AgentDesk-Setup-<版本>.exe`：安裝版（裝在使用者自己的資料夾，會建立開始選單與桌面捷徑）
+- `AgentDesk-<版本>-portable.exe`：免安裝版，直接執行
+
+目前還沒有程式碼簽章，第一次開啟時 Windows SmartScreen 可能會擋：按「其他資訊」→「仍要執行」。用這兩個檔案不需要 Node.js，但還是要有各 Agent 的 CLI（見下方）。
+
+## 從原始碼執行
 ```bash
 git clone https://github.com/satan0124/AgentDesk.git
 cd AgentDesk
@@ -52,6 +59,13 @@ Agent 會在對話的工作資料夾裡讀寫檔案、執行指令。預設權�
 - `src/shared/i18n.js`：介面語言對照。
 - `src/renderer/`：介面。
 - `tools/make-icon.js`：從 `build/icon.svg` 產生 icon。
+
+## 打包安裝檔
+```bash
+npm install
+npm run dist
+```
+輸出在 `dist/`。如果解壓 `winCodeSign` 時出現「Cannot create symbolic link」，可以開啟 Windows 開發人員模式，或自己把那個壓縮檔解到 `%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0`（略過裡面的 `darwin` 資料夾）。
 
 ## 授權
 [MIT](LICENSE)
