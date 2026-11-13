@@ -54,6 +54,9 @@
     '依專案': 'By project',
     '切換分類方式：依日期／依專案（工作資料夾）': 'Group chats by date or by project (working folder)',
     '在這個資料夾開新對話': 'New chat in this folder',
+    '選擇這個對話的工作資料夾': 'Choose the working folder for this chat',
+    '最近': 'Recent',
+    '開啟資料夾…': 'Open folder…',
 
     // ---- 空白頁、輸入框 ----
     '要做什麼？': 'What should we work on?',
@@ -300,6 +303,9 @@
     "依專案": "按项目",
     "切換分類方式：依日期／依專案（工作資料夾）": "切换分类方式：按日期／按项目（工作文件夹）",
     "在這個資料夾開新對話": "在这个文件夹新建对话",
+    "選擇這個對話的工作資料夾": "选择这个对话的工作文件夹",
+    "最近": "最近",
+    "開啟資料夾…": "打开文件夹…",
     "要做什麼？": "要做什么？",
     "預設由 Claude 回答；Claude 可以把工作交給 Codex 或 Cursor。也可以在下方直接切換對象。": "默认由 Claude 回答；Claude 可以把工作交给 Codex 或 Cursor。也可以在下方直接切换对象。",
     "輸入訊息，Enter 送出、Shift+Enter 換行；可直接貼上或拖曳圖片、檔案": "输入消息，Enter 发送、Shift+Enter 换行；可直接粘贴或拖放图片、文件",

@@ -60,7 +60,7 @@ function convItem(c, sub) {
 function renderList() {
   const q = $('#search').value.trim().toLowerCase();
   const ul = $('#convList'); ul.innerHTML = '';
-  $('#viewToggle').textContent = t(sideView === 'project' ? '依專案' : '依日期');
+  for (const b of $('#viewToggle').children) b.classList.toggle('on', b.dataset.view === sideView);
   const match = c => !q || c.title.toLowerCase().includes(q) || t(c.title).toLowerCase().includes(q);
   const live = convList.filter(c => !c.archived && match(c));
   const pinned = live.filter(c => c.pinned), rest = live.filter(c => !c.pinned);
@@ -156,7 +156,7 @@ document.addEventListener('keydown', e => {
   const b = $(`#ctxMenu button[data-key="${e.key.toUpperCase()}"]`);
   if (b) convAction(b.dataset.act, menuConv);
 }, true);
-$('#viewToggle').onclick = () => { sideView = sideView === 'project' ? 'date' : 'project'; saveSide(); renderList(); };
+$('#viewToggle').onclick = e => { const v = e.target.dataset.view; if (v && v !== sideView) { sideView = v; saveSide(); renderList(); } };
 
 async function refreshList(list) { convList = list || await api.listConvs(); renderList(); }
 
@@ -205,6 +205,10 @@ function isRunning() { return current?.messages.some(m => m.role === 'assistant'
 function renderConv() {
   $('#convTitle').textContent = current ? t(current.title) : '';
   $('#cwdBtn').textContent = current ? current.cwd : '';
+  // 還沒開始聊的對話，輸入框上方顯示資料夾選單
+  $('#cwdPick').classList.toggle('hidden', !current || !!current.messages.length);
+  $('#cwdPick .t').textContent = current ? baseName(current.cwd) : '';
+  $('#cwdPickBtn').title = current ? current.cwd : '';
   $('#cwdBtn').title = current ? t('工作資料夾：{cwd}\n點擊更換', { cwd: current.cwd }) : '';
   const box = $('#messages'); box.innerHTML = '';
   for (const m of current?.messages || []) box.appendChild(renderMsg(m));
@@ -611,11 +615,38 @@ $('#convTitle').ondblclick = () => {
   box.onblur = done;
   box.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); box.blur(); } if (e.key === 'Escape') { box.textContent = t(current.title); box.blur(); } };
 };
-$('#cwdBtn').onclick = async () => {
-  if (!current) return;
-  const p = await api.pickFolder(current.cwd);
-  if (p) { current = await api.updateConv(current.id, { cwd: p }); renderConv(); }
+async function setCwd(p) {
+  if (!current || !p) return;
+  if (projKey(p) !== projKey(current.cwd)) { current = await api.updateConv(current.id, { cwd: p }); renderConv(); }
+  $('#input').focus();
+}
+$('#cwdBtn').onclick = async () => current && setCwd(await api.pickFolder(current.cwd));
+
+// ---------- 新對話：輸入框上方的資料夾選單 ----------
+function recentDirs() {
+  const seen = new Map();
+  for (const c of [...convList].sort((a, b) => b.updated - a.updated)) if (c.cwd && !seen.has(projKey(c.cwd))) seen.set(projKey(c.cwd), c.cwd);
+  const d = settings?.defaultCwd;
+  if (d && !seen.has(projKey(d))) seen.set(projKey(d), d);
+  return [...seen.values()].slice(0, 8);
+}
+function closeCwdMenu() { $('#cwdMenu').classList.add('hidden'); $('#cwdPickBtn').classList.remove('on'); }
+function openCwdMenu() {
+  const cur = projKey(current?.cwd);
+  $('#cwdMenu').innerHTML = `<div class="sec">${esc(t('最近'))}</div>`
+    + recentDirs().map(d => `<button data-dir="${esc(d)}" title="${esc(d)}"><span class="mi">📁</span><span class="nm">${esc(baseName(d))}</span>${projKey(d) === cur ? '<span class="ck">✓</span>' : ''}</button>`).join('')
+    + `<hr><button data-act="browse"><span class="mi">…</span>${esc(t('開啟資料夾…'))}</button>`;
+  $('#cwdMenu').classList.remove('hidden');
+  $('#cwdPickBtn').classList.add('on');
+}
+$('#cwdPickBtn').onclick = e => { e.stopPropagation(); $('#cwdMenu').classList.contains('hidden') ? openCwdMenu() : closeCwdMenu(); };
+$('#cwdMenu').onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  closeCwdMenu();
+  setCwd(b.dataset.act === 'browse' ? await api.pickFolder(current?.cwd || settings.defaultCwd) : b.dataset.dir);
 };
+document.addEventListener('click', e => { if (!e.target.closest('.cwd-pick')) closeCwdMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#cwdMenu').classList.contains('hidden')) closeCwdMenu(); });
 $('#openCwd').onclick = () => current && api.openPath(current.cwd);
 $('#resetSessions').onclick = async () => {
   if (!current || !confirm(t('讓 Claude / Codex / Cursor 下一次都開新 session？\n畫面上的對話記錄會保留，並在下一次送出時當作參考帶給 Agent。'))) return;

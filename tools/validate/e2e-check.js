@@ -38,10 +38,15 @@
     .map(s => [s.dataset.agent, (s.querySelector('.pill')?.className || 'none').replace('pill ', '')]));
   out.settingsCjk = [...document.querySelectorAll('#settingsModal label > span, #settingsModal h3, #settingsModal .btn')]
     .map(x => x.textContent).filter(t => CJK.test(t) && !/假|測試/.test(t)).slice(0, 5);
+  // 用 MutationObserver 等視窗關閉：視窗被遮住時 Chromium 會把計時器節流到約 1 秒一次，用 setTimeout 輪詢會量到假的 1000ms
+  const modal = document.querySelector('#settingsModal');
   const t0 = Date.now();
+  const closed = new Promise(res => {
+    const mo = new MutationObserver(() => { if (modal.classList.contains('hidden')) { mo.disconnect(); res(Date.now() - t0); } });
+    mo.observe(modal, { attributes: true, attributeFilter: ['class'] });
+  });
   document.querySelector('#saveSettings').click();
-  while (!document.querySelector('#settingsModal').classList.contains('hidden') && Date.now() - t0 < 10000) await wait(10);
-  out.saveMs = Date.now() - t0;
+  out.saveMs = await Promise.race([closed, wait(10000).then(() => Date.now() - t0)]);
   // 5) 圖片預覽能開能關
   openLightboxPath(current.cwd + '\\nonexistent.png');
   const lbOpen = !document.querySelector('#lightbox').classList.contains('hidden');
@@ -69,10 +74,26 @@
   menu.querySelector('[data-act="unarchive"]').click();
   await wait(400);
   out.unarchived = !(await api.getConv(id)).archived && !!item();
-  document.querySelector('#viewToggle').click();
+  document.querySelector('#viewToggle [data-view="project"]').click();
   out.projectView = document.querySelectorAll('#convList .proj').length > 0 && !!document.querySelector('#convList li.conv.sub');
   out.viewCjk = CJK.test(document.querySelector('#viewToggle').textContent);
-  document.querySelector('#viewToggle').click();
+  document.querySelector('#viewToggle [data-view="date"]').click();
+  out.projectView = out.projectView && !document.querySelector('#convList .proj');
+  // 6b) 新對話：輸入框上方的資料夾選單（有訊息的對話不顯示）
+  const pick = document.querySelector('#cwdPick');
+  const hiddenWithMsgs = pick.classList.contains('hidden');
+  await newConv();
+  await wait(300);
+  const shown = !pick.classList.contains('hidden') && pick.querySelector('.t').textContent === baseName(current.cwd);
+  document.querySelector('#cwdPickBtn').click();
+  const cm = document.querySelector('#cwdMenu');
+  const dirs = [...cm.querySelectorAll('button[data-dir]')];
+  out.cwdPick = { hiddenWithMsgs, shown, open: !cm.classList.contains('hidden'), dirs: dirs.length,
+    checked: dirs.filter(b => b.querySelector('.ck')).length, browse: !!cm.querySelector('[data-act="browse"]') };
+  // 資料夾名稱是使用者資料，只查介面字樣
+  out.cwdPickCjk = [cm.querySelector('.sec').textContent, cm.querySelector('[data-act="browse"]').textContent].filter(x => CJK.test(x));
+  document.body.click();
+  out.cwdPick.closed = cm.classList.contains('hidden');
   // 7) 主視窗不能被導走
   const before = location.href;
   location.href = 'file:///C:/__agentdesk_validate__/x.png';

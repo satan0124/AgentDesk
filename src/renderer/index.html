@@ -10,7 +10,7 @@
   <aside id="sidebar">
     <button id="newConv" class="side-btn"><span class="ico">＋</span>新對話</button>
     <div class="search"><input id="search" placeholder="搜尋對話"></div>
-    <div class="side-label"><span>對話記錄</span><button id="viewToggle" class="view-toggle" title="切換分類方式：依日期／依專案（工作資料夾）"></button></div>
+    <div class="side-label"><span>對話記錄</span><div id="viewToggle" class="view-seg" title="切換分類方式：依日期／依專案（工作資料夾）"><button data-view="date">依日期</button><button data-view="project">依專案</button></div></div>
     <ul id="convList"></ul>
     <button id="openSettings" class="side-btn bottom"><span class="ico">⚙</span>設定</button>
   </aside>
@@ -36,6 +36,10 @@
     </div>
 
     <footer id="composer">
+      <div id="cwdPick" class="cwd-pick hidden">
+        <button id="cwdPickBtn" class="cwd-btn" title="選擇這個對話的工作資料夾"><span class="mi">📁</span><span class="t"></span><span class="caret"></span></button>
+        <div id="cwdMenu" class="menu hidden"></div>
+      </div>
       <div class="composer-box">
         <div id="attachBar" class="attach-bar hidden"></div>
         <textarea id="input" rows="1" placeholder="輸入訊息，Enter 送出、Shift+Enter 換行；可直接貼上或拖曳圖片、檔案"></textarea>

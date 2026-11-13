@@ -383,13 +383,16 @@ async function e2eTests() {
     ['pin', 'rename', 'archive', 'delete'].every(a => r.ctxItems?.includes(a)) && !r.ctxCjk.length && !r.viewCjk
       && r.pinned && r.archived && r.unarchived && r.projectView,
     JSON.stringify({ items: r.ctxItems, cjk: r.ctxCjk, viewCjk: r.viewCjk, pinned: r.pinned, archived: r.archived, unarchived: r.unarchived, project: r.projectView })));
+  await check('畫面：新對話在輸入框上方選資料夾（最近使用）', () => { const p = r.cwdPick || {};
+    assert(p.hiddenWithMsgs && p.shown && p.open && p.dirs >= 1 && p.checked === 1 && p.browse && p.closed && !r.cwdPickCjk?.length,
+      JSON.stringify({ ...p, cjk: r.cwdPickCjk })); });
   // 簡中：只有繁體才有的字（出現在繁中原文、但沒出現在任何簡中翻譯裡）不應留在畫面上
   const { CN } = require(path.join(SRC, 'shared', 'i18n.js'));
   const simp = new Set([...Object.values(CN).join('')]);
   const trad = [...new Set([...Object.keys(CN).join('')])].filter(ch => CJK.test(ch) && !simp.has(ch));
   const rc = await launch('zh-CN', [['xecho', 'hello'], ['xagy', 'first']], `[${trad.join('')}]`);
-  if (rc) await check('畫面：簡中介面沒有殘留繁體字', () => assert(rc.uiLang === 'zh-CN' && !rc.cjkLeft.length && !rc.settingsCjk.length && !rc.ctxCjk.length && !rc.viewCjk,
-    `${rc.uiLang} ${[...rc.cjkLeft, ...rc.settingsCjk, ...rc.ctxCjk].join('；')}${rc.viewCjk ? '；分類切換鈕' : ''}`));
+  if (rc) await check('畫面：簡中介面沒有殘留繁體字', () => assert(rc.uiLang === 'zh-CN' && !rc.cjkLeft.length && !rc.settingsCjk.length && !rc.ctxCjk.length && !rc.viewCjk && !rc.cwdPickCjk?.length,
+    `${rc.uiLang} ${[...rc.cjkLeft, ...rc.settingsCjk, ...rc.ctxCjk, ...(rc.cwdPickCjk || [])].join('；')}${rc.viewCjk ? '；分類切換鈕' : ''}`));
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
