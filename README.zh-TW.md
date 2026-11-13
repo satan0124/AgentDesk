@@ -2,7 +2,7 @@
 
 # AgentDesk
 
-[English](README.md) ｜ 繁體中文
+[English](README.md) ｜ 繁體中文 ｜ [简体中文](README.zh-CN.md)
 
 一個桌面對話介面，把好幾個 CLI 程式 Agent 放在同一個視窗裡：主要對話走 **Claude Code**，並可加入 **Codex CLI**、**Cursor Agent CLI**，或任何你自己設定的 CLI（例如 Gemini CLI）。Claude 可以把工作委派給其他 Agent，畫面即時顯示它們在做什麼。
 
@@ -41,7 +41,7 @@ npm start
 - **右欄 Agent 工作狀況**：每個 Agent 是閒置還是工作中、在哪個對話、正在做什麼、經過多久，以及最近完成的工作。
 - **連結 CLI**：設定頁偵測每個 CLI 是否安裝、版本、登入帳號；可安裝、登入、指定路徑。
 - **自訂 Agent**：設定頁最下方「＋ 新增自訂 Agent」，範本有 Antigravity CLI（`agy`，取代 Gemini CLI）、Gemini CLI、Claude 相容 stream-json、一般 CLI（純文字）。可設指令、參數、prompt 傳入方式、輸出格式、模型、接續 session 旗標、給 Claude 的說明等。
-- **語言**：介面有繁體中文與英文。預設跟隨系統：繁體中文系統用繁中，其他一律英文；可在設定切換。
+- **語言**：介面有繁體中文、簡體中文與英文。預設跟隨系統：繁體中文系統用繁中、簡體中文系統用簡中，其他一律英文；可在設定切換。
 
 ## 權限提醒
 Agent 會在對話的工作資料夾裡讀寫檔案、執行指令。預設權限：Claude「自動接受改檔」、Codex「可寫工作資料夾」、Cursor「自動執行指令（--force）」，可在設定調整。請只在你信任的資料夾使用。

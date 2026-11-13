@@ -2,7 +2,7 @@
 
 # AgentDesk
 
-English ｜ [繁體中文](README.zh-TW.md)
+English ｜ [繁體中文](README.zh-TW.md) ｜ [简体中文](README.zh-CN.md)
 
 A desktop chat app that puts several command-line coding agents in one window. The main chat runs on **Claude Code**, and you can add **Codex CLI**, **Cursor Agent CLI**, or any other CLI you configure yourself (for example Gemini CLI). Claude can delegate work to the other agents, and you see what each of them is doing in real time.
 
@@ -41,7 +41,7 @@ On first launch, if Claude Code is missing or not signed in, AgentDesk opens Set
 - **Agent activity panel**: whether each agent is idle or working, in which chat, what it is doing and for how long, plus recently finished work.
 - **Connect CLIs**: Settings detects whether each CLI is installed, its version and the signed-in account, and can install, sign in or locate it.
 - **Custom agents**: **+ Add custom agent** at the bottom of Settings, with templates for Antigravity CLI (`agy`, the successor to Gemini CLI), Gemini CLI, Claude-compatible stream-json and any plain-text CLI. Configure the command, arguments, how the prompt is passed, output format, model, resume flag, a description for Claude, and more.
-- **Language**: English and Traditional Chinese. By default it follows the system: Traditional Chinese systems get Traditional Chinese, everything else gets English. You can change it in Settings.
+- **Language**: English, Traditional Chinese and Simplified Chinese. By default it follows the system: Traditional Chinese systems get Traditional Chinese, Simplified Chinese systems get Simplified Chinese, everything else gets English. You can change it in Settings.
 
 ## Permissions
 Agents read and write files and run commands in the chat's working folder. Defaults: Claude accepts edits automatically, Codex may write in the working folder, Cursor runs commands automatically (`--force`). Adjust these in Settings, and only use folders you trust.

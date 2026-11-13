@@ -714,7 +714,7 @@ function translateDom(root) {
       if (v && t(v) !== v) el.setAttribute(attr, t(v));
     }
   }
-  document.documentElement.lang = I18n.getLang() === 'en' ? 'en' : 'zh-Hant';
+  document.documentElement.lang = { en: 'en', 'zh-CN': 'zh-Hans' }[I18n.getLang()] || 'zh-Hant';
 }
 
 function openSettings(note) {

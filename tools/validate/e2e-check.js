@@ -3,7 +3,8 @@
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
   const out = {};
-  const CJK = /[\u4e00-\u9fff]/;
+  // 英文介面查「任何中文」；簡中介面查「只有繁體才有的字」（由 validate.js 帶入 window.__FOREIGN）
+  const CJK = window.__FOREIGN ? new RegExp(window.__FOREIGN) : /[\u4e00-\u9fff]/;
   // 1) 介面語言（設定檔指定 en）：側欄、頂列、輸入框、右欄不應殘留中文
   out.uiLang = settings.uiLang;
   const zones = ['#sidebar', '#topbar', '#composer', '#agentPanel'];

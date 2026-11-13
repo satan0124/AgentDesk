@@ -78,13 +78,16 @@ async function staticChecks() {
         if (!(k in EN)) problems.push(`${f} 缺英文：${k.slice(0, 30)}`);
       }
     }
+    const { CN } = require(path.join(SRC, 'shared', 'i18n.js'));
+    const ph = s => [...s.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort().join(',');
     for (const [k, v] of Object.entries(EN)) {
-      const ph = s => [...s.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort().join(',');
       if (!v) problems.push(`空翻譯：${k.slice(0, 30)}`);
-      else if (ph(k) !== ph(v)) problems.push(`佔位不一致：${k.slice(0, 30)}`);
+      else if (ph(k) !== ph(v)) problems.push(`英文佔位不一致：${k.slice(0, 30)}`);
+      if (CJK.test(k) && !(k in CN)) problems.push(`缺簡中：${k.slice(0, 30)}`);
+      else if (CJK.test(k) && ph(k) !== ph(CN[k])) problems.push(`簡中佔位不一致：${k.slice(0, 30)}`);
     }
     assert(!problems.length, problems.slice(0, 8).join('；') + (problems.length > 8 ? `…共 ${problems.length} 項` : ''));
-    return `${Object.keys(EN).length} 條對照`;
+    return `英文 ${Object.keys(EN).length}、簡中 ${Object.keys(CN).length} 條對照`;
   });
 
   await check('IPC：preload 用到的頻道 main 都有處理；畫面呼叫的 api 都有開放', () => {
@@ -237,9 +240,9 @@ async function unitTests() {
 
   await check('語言：系統語言對應', () => {
     const { pickLang, t, setLang } = require(path.join(SRC, 'shared', 'i18n.js'));
-    const cases = [[['zh-Hant-TW'], 'zh-TW'], [['zh-TW'], 'zh-TW'], [['zh-HK'], 'zh-TW'], [['zh-CN'], 'en'], [['zh-Hans-CN'], 'en'], [['en-US'], 'en'], [['ja-JP'], 'en'], [[], 'en']];
+    const cases = [[['zh-Hant-TW'], 'zh-TW'], [['zh-TW'], 'zh-TW'], [['zh-HK'], 'zh-TW'], [['zh-CN'], 'zh-CN'], [['zh-Hans-CN'], 'zh-CN'], [['zh-SG'], 'zh-CN'], [['zh'], 'zh-CN'], [['en-US'], 'en'], [['ja-JP'], 'en'], [[], 'en']];
     for (const [sys, want] of cases) assert(pickLang('auto', sys) === want, `${sys} → ${pickLang('auto', sys)}，應為 ${want}`);
-    assert(pickLang('zh-TW', ['en-US']) === 'zh-TW' && pickLang('en', ['zh-TW']) === 'en', '手動指定沒有優先');
+    assert(pickLang('zh-TW', ['en-US']) === 'zh-TW' && pickLang('en', ['zh-TW']) === 'en' && pickLang('zh-CN', ['en-US']) === 'zh-CN', '手動指定沒有優先');
     setLang('en'); const en = t('等待 {name} 完成', { name: 'X' }); setLang('zh-TW');
     assert(en === 'Waiting for X', `代換錯誤：${en}`);
   });
@@ -338,22 +341,30 @@ async function e2eTests() {
       xagy: c('fake-agy.js', { name: 'Agy', color: '#4f8ef7', format: 'antigravity', promptMode: 'stream-json', modelFlag: '--model', resumeFlag: '--conversation' }),
     },
   }, null, 2));
-  const steps = [['xecho', 'hello from validate'], ['xagy', 'first'], ['xagy', 'second']];
-  const env = { ...process.env, AGENTDESK_DATA: data, AGENTDESK_SELFTEST: dir, AGENTDESK_SELFTEST_STEPS: JSON.stringify(steps),
-    AGENTDESK_SELFTEST_SHOTS: JSON.stringify([['e2e', '']]), AGENTDESK_SELFTEST_JS: fs.readFileSync(path.join(__dirname, 'validate', 'e2e-check.js'), 'utf8') };
-  delete env.ELECTRON_RUN_AS_NODE;
-  const out = await new Promise(resolve => {
-    // --no-sandbox：只在測試時用（從受限環境啟動時 Chromium 沙箱會讓渲染程序崩潰）
-    const p = spawn(electron, [ROOT, '--no-sandbox'], { env, windowsHide: true });
-    let buf = '';
-    p.stdout.on('data', d => { buf += d; });
-    p.stderr.on('data', d => { buf += d; });
-    const timer = setTimeout(() => { p.kill(); resolve(buf + '\n[timeout]'); }, 90000);
-    p.on('close', () => { clearTimeout(timer); resolve(buf); });
-  });
-  const line = out.split('\n').find(l => l.startsWith('[st] js '));
-  if (!line) { fail('畫面測試：程式啟動並跑完', (out.match(/Error[^\n]*/) || [out.slice(-300)])[0]); return; }
-  let r; try { r = JSON.parse(line.slice(8)); } catch (e) { fail('畫面測試：結果解析', e.message); return; }
+  const checkJs = fs.readFileSync(path.join(__dirname, 'validate', 'e2e-check.js'), 'utf8');
+  const launch = async (language, steps, foreign) => {
+    const s = JSON.parse(fs.readFileSync(path.join(data, 'settings.json'), 'utf8'));
+    s.language = language;
+    fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify(s, null, 2));
+    const env = { ...process.env, AGENTDESK_DATA: data, AGENTDESK_SELFTEST: dir, AGENTDESK_SELFTEST_STEPS: JSON.stringify(steps),
+      AGENTDESK_SELFTEST_SHOTS: JSON.stringify([[`e2e-${language}`, '']]),
+      AGENTDESK_SELFTEST_JS: (foreign ? `window.__FOREIGN = ${JSON.stringify(foreign)};\n` : '') + checkJs };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const out = await new Promise(resolve => {
+      // --no-sandbox：只在測試時用（從受限環境啟動時 Chromium 沙箱會讓渲染程序崩潰）
+      const p = spawn(electron, [ROOT, '--no-sandbox'], { env, windowsHide: true });
+      let buf = '';
+      p.stdout.on('data', d => { buf += d; });
+      p.stderr.on('data', d => { buf += d; });
+      const timer = setTimeout(() => { p.kill(); resolve(buf + '\n[timeout]'); }, 90000);
+      p.on('close', () => { clearTimeout(timer); resolve(buf); });
+    });
+    const line = out.split('\n').find(l => l.startsWith('[st] js '));
+    if (!line) { fail(`畫面測試（${language}）：程式啟動並跑完`, (out.match(/Error[^\n]*/) || [out.slice(-300)])[0]); return null; }
+    try { return JSON.parse(line.slice(8)); } catch (e) { fail(`畫面測試（${language}）：結果解析`, e.message); return null; }
+  };
+  const r = await launch('en', [['xecho', 'hello from validate'], ['xagy', 'first'], ['xagy', 'second']]);
+  if (!r) return;
   const msgs = r.messages || [];
   await check('畫面：英文介面沒有殘留中文', () => assert(r.uiLang === 'en' && !r.cjkLeft.length && !r.settingsCjk.length, `${r.uiLang} ${[...r.cjkLeft, ...r.settingsCjk].join('；')}`));
   await check('畫面：切換列與右欄列出已加入的 Agent', () => assert(r.picker.join() === 'claude,xecho,xagy' && r.panelCards === 3, `${r.picker} / ${r.panelCards}`));
@@ -368,6 +379,13 @@ async function e2eTests() {
     return `存檔 ${r.saveMs}ms`;
   });
   await check('畫面：圖片預覽能開能關、主視窗不會被導走', () => assert(r.lightbox && r.navigationBlocked, JSON.stringify({ lightbox: r.lightbox, nav: r.navigationBlocked })));
+  // 簡中：只有繁體才有的字（出現在繁中原文、但沒出現在任何簡中翻譯裡）不應留在畫面上
+  const { CN } = require(path.join(SRC, 'shared', 'i18n.js'));
+  const simp = new Set([...Object.values(CN).join('')]);
+  const trad = [...new Set([...Object.keys(CN).join('')])].filter(ch => CJK.test(ch) && !simp.has(ch));
+  const rc = await launch('zh-CN', [['xecho', 'hello'], ['xagy', 'first']], `[${trad.join('')}]`);
+  if (rc) await check('畫面：簡中介面沒有殘留繁體字', () => assert(rc.uiLang === 'zh-CN' && !rc.cjkLeft.length && !rc.settingsCjk.length,
+    `${rc.uiLang} ${[...rc.cjkLeft, ...rc.settingsCjk].join('；')}`));
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
