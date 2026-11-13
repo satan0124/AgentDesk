@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34343c"/>
+      <stop offset="1" stop-color="#17171a"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6f3ee"/>
+      <stop offset="1" stop-color="#dcd8d0"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="#ffffff" stroke-opacity=".08"/>
+  <!-- 對話泡泡 -->
+  <path d="M68 56h120a36 36 0 0 1 36 36v56a36 36 0 0 1-36 36h-62l-38 30a6 6 0 0 1-9.7-4.7V184h-10.3a36 36 0 0 1-36-36V92a36 36 0 0 1 36-36z" fill="url(#bubble)"/>
+  <!-- 三個 Agent：Claude / Codex / Cursor -->
+  <circle cx="86" cy="120" r="17" fill="#d97757"/>
+  <circle cx="128" cy="120" r="17" fill="#5aa9e6"/>
+  <circle cx="170" cy="120" r="17" fill="#a78bfa"/>
+</svg>

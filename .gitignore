@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# 本機開發記錄與 Claude Code 設定，不上傳
+docs/
+.claude/

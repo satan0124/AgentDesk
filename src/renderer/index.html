@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https:;">
+  <title>AgentDesk</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <button id="newConv" class="side-btn"><span class="ico">＋</span>新對話</button>
+    <div class="search"><input id="search" placeholder="搜尋對話"></div>
+    <div class="side-label">對話記錄</div>
+    <ul id="convList"></ul>
+    <button id="openSettings" class="side-btn bottom"><span class="ico">⚙</span>設定</button>
+  </aside>
+
+  <main id="main">
+    <header id="topbar">
+      <div id="convTitle" title="雙擊改名"></div>
+      <div class="top-actions">
+        <button id="cwdBtn" class="chip" title="更換工作資料夾"></button>
+        <button id="openCwd" class="icon-btn" title="在檔案總管開啟">📂</button>
+        <button id="resetSessions" class="icon-btn" title="讓三個 Agent 重開 session（對話記錄保留）">⟲</button>
+        <button id="deleteConv" class="icon-btn" title="刪除這個對話">🗑</button>
+        <button id="togglePanel" class="icon-btn" title="顯示／隱藏 Agent 工作狀況">▤</button>
+      </div>
+    </header>
+
+    <section id="messages"></section>
+
+    <div id="empty" class="hidden">
+      <div class="empty-title">要做什麼？</div>
+      <div class="empty-sub">預設由 Claude 回答；Claude 可以把工作交給 Codex 或 Cursor。也可以在下方直接切換對象。</div>
+    </div>
+
+    <footer id="composer">
+      <div class="composer-box">
+        <div id="attachBar" class="attach-bar hidden"></div>
+        <textarea id="input" rows="1" placeholder="輸入訊息，Enter 送出、Shift+Enter 換行；可直接貼上或拖曳圖片、檔案"></textarea>
+        <div class="composer-row">
+          <div class="plus-wrap">
+            <button id="plusBtn" class="plus" title="新增檔案、相片或資料夾">＋</button>
+            <div id="plusMenu" class="menu hidden">
+              <button data-act="files"><span class="mi">📎</span>新增檔案或相片<kbd>Ctrl+U</kbd></button>
+              <button data-act="folder"><span class="mi">📁</span>新增資料夾</button>
+            </div>
+          </div>
+          <div id="agentPicker" class="seg">
+            <button data-agent="claude" class="on">Claude</button>
+            <button data-agent="codex">Codex</button>
+            <button data-agent="cursor">Cursor</button>
+          </div>
+          <span id="agentInfo" class="muted"></span>
+          <span class="spacer"></span>
+          <button id="sendBtn" class="send" title="送出">↑</button>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <aside id="agentPanel">
+    <div class="panel-head">Agent 工作狀況<span id="panelCount" class="count"></span></div>
+    <div id="agentCards"></div>
+    <div class="panel-sub">最近完成</div>
+    <ul id="recentJobs"></ul>
+  </aside>
+
+  <div id="lightbox" class="lightbox hidden">
+    <button class="lb-close" title="關閉（Esc）">✕</button>
+    <button class="lb-nav lb-prev" title="上一張（←）">‹</button>
+    <button class="lb-nav lb-next" title="下一張（→）">›</button>
+    <div class="lb-stage"><img id="lbImg" draggable="false"></div>
+    <div class="lb-bar">
+      <span id="lbName" class="lb-name"></span>
+      <span id="lbZoom" class="lb-zoom"></span>
+      <button data-lb="fit" class="btn">符合視窗</button>
+      <button data-lb="orig" class="btn">原始大小</button>
+      <button data-lb="open" class="btn">開啟</button>
+      <button data-lb="reveal" class="btn">在資料夾中顯示</button>
+    </div>
+  </div>
+
+  <div id="dropOverlay" class="drop-overlay hidden"><div>放開即可附加檔案</div></div>
+
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><h2>設定</h2><button class="icon-btn" data-close>✕</button></div>
+      <div class="modal-body">
+        <section class="set-group">
+          <h3>一般</h3>
+          <label class="row"><span>介面語言</span>
+            <div><select id="setLang"><option value="auto">自動（跟隨系統）</option><option value="zh-TW">繁體中文</option><option value="en">English</option></select>
+            <div class="hint">更改語言後會重新載入畫面。</div></div></label>
+          <label class="row"><span>新對話預設工作資料夾</span>
+            <div class="inline"><input id="setCwd"><button id="pickCwd" class="btn">選擇…</button></div></label>
+          <label class="row check"><input type="checkbox" id="setDelegation"><span>讓 Claude 可以把工作委派給已加入的其他 Agent</span></label>
+        </section>
+        <div id="agentSettings"></div>
+      </div>
+      <div class="modal-foot"><span id="setMsg" class="muted"></span><button class="btn" data-close>取消</button><button id="saveSettings" class="btn primary">儲存</button></div>
+    </div>
+  </div>
+
+  <script src="marked.js"></script>
+  <script src="../shared/i18n.js"></script>
+  <script src="../shared/reduce.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
