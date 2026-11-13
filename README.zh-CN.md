@@ -29,18 +29,18 @@ npm start
 ```
 之后也可以直接双击 `AgentDesk.bat`（第一次会自动 `npm install`）。
 
-第一次打开时，如果找不到 Claude Code 或还没登录，会直接带到设置页，按“安装”“登录”即可。
+第一次打开时，如果找不到 Claude Code 或还没登录，会直接跳转到设置页，点“安装”“登录”即可。
 
 ## 功能
-- **对话**：左侧对话记录（依日期分组、可搜索），Ctrl+N 开新对话；每个对话有自己的工作文件夹，输入框草稿也各自保存。
-- **多个 Agent**：默认只有 Claude。Codex、Cursor 在设置按“＋ 加入”；输入框下方切换对象（Alt+1～9）。
+- **对话**：左侧对话记录（按日期分组、可搜索），Ctrl+N 开新对话；每个对话有自己的工作文件夹，输入框草稿也各自保存。
+- **多个 Agent**：默认只有 Claude。Codex、Cursor 在设置中点“＋ 加入”；输入框下方切换对象（Alt+1～9）。
 - **委派**：Claude 通过内置的 MCP 工具（`ask_<agent>`）把工作交给其他 Agent，委派卡片实时显示对方的工具步骤与回复。
 - **上下文续接**：每个对话记住各 Agent 的 session；直接跟某个 Agent 讲话时，它没看过的其他 Agent 往来会自动附在前面。
 - **附件**：“＋”菜单添加文件／照片（Ctrl+U）或文件夹；也能 Ctrl+V 粘贴截屏、拖放文件进窗口。
-- **图片**：回复中的图片缩到栏宽，点击放大预览（滚轮缩放、拖放平移、←/→ 换张、Esc 关闭）。
+- **图片**：回复中的图片缩到栏宽，点击放大预览（滚轮缩放、拖动平移、←/→ 换张、Esc 关闭）。
 - **右栏 Agent 工作状况**：每个 Agent 是空闲还是工作中、在哪个对话、正在做什么、经过多久，以及最近完成的工作。
 - **连接 CLI**：设置页检测每个 CLI 是否安装、版本、登录账号；可安装、登录、指定路径。
-- **自定义 Agent**：设置页最下方“＋ 添加自定义 Agent”，模板有 Antigravity CLI（`agy`，取代 Gemini CLI）、Gemini CLI、Claude 兼容 stream-json、通用 CLI（纯文本）。可设命令、参数、prompt 传入方式、输出格式、模型、续接 session 标志、给 Claude 的说明等。
+- **自定义 Agent**：设置页最下方“＋ 添加自定义 Agent”，模板有 Antigravity CLI（`agy`，取代 Gemini CLI）、Gemini CLI、Claude 兼容 stream-json、通用 CLI（纯文本）。可设置命令、参数、prompt 传入方式、输出格式、模型、续接 session 标志、给 Claude 的说明等。
 - **语言**：界面有繁体中文、简体中文与英文。默认跟随系统：繁体中文系统用繁中、简体中文系统用简中，其他一律英文；可在设置切换。
 
 ## 权限提醒
@@ -62,8 +62,8 @@ Agent 会在对话的工作文件夹里读写文件、运行命令。默认权�
 
 ## 使用 Gemini／Antigravity
 Google 已用 Antigravity CLI（`agy`）取代 Gemini CLI，Antigravity 桌面版本身不含这个 CLI，要另外装：
-1. 设置 →“＋ 添加自定义 Agent”→ 模板选“Antigravity CLI（agy）”→ 按“安装”（运行 `irm https://antigravity.google/cli/install.ps1 | iex`）。
-2. 按“登录”：会开一个交互模式的 `agy`，在里面完成登录向导后关掉。
+1. 设置 →“＋ 添加自定义 Agent”→ 模板选“Antigravity CLI（agy）”→ 点“安装”（运行 `irm https://antigravity.google/cli/install.ps1 | iex`）。
+2. 点“登录”：会开一个交互模式的 `agy`，在里面完成登录向导后关掉。
 3. 保存。AgentDesk 用 stdin 的 stream-json 传 prompt 给 `agy`，并用 `--conversation` 续接对话。
 
 ## 验证
