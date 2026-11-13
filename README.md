@@ -40,7 +40,7 @@ On first launch, if Claude Code is missing or not signed in, AgentDesk opens Set
 - **Images**: images in replies fit the column width; click one for a full-screen preview (wheel to zoom, drag to pan, ←/→ to switch, Esc to close).
 - **Agent activity panel**: whether each agent is idle or working, in which chat, what it is doing and for how long, plus recently finished work.
 - **Connect CLIs**: Settings detects whether each CLI is installed, its version and the signed-in account, and can install, sign in or locate it.
-- **Custom agents**: **+ Add custom agent** at the bottom of Settings, with templates for Gemini CLI, Claude-compatible stream-json and any plain-text CLI. Configure the command, arguments, how the prompt is passed, output format, model, resume flag, a description for Claude, and more.
+- **Custom agents**: **+ Add custom agent** at the bottom of Settings, with templates for Antigravity CLI (`agy`, the successor to Gemini CLI), Gemini CLI, Claude-compatible stream-json and any plain-text CLI. Configure the command, arguments, how the prompt is passed, output format, model, resume flag, a description for Claude, and more.
 - **Language**: English and Traditional Chinese. By default it follows the system: Traditional Chinese systems get Traditional Chinese, everything else gets English. You can change it in Settings.
 
 ## Permissions
@@ -59,6 +59,20 @@ Agents read and write files and run commands in the chat's working folder. Defau
 - `src/shared/i18n.js`: UI translations.
 - `src/renderer/`: the UI.
 - `tools/make-icon.js`: builds the icon from `build/icon.svg`.
+
+## Using Gemini / Antigravity
+Google replaced Gemini CLI with the Antigravity CLI (`agy`). The Antigravity desktop app does not include it, so install the CLI separately:
+1. Settings → **+ Add custom agent** → template **Antigravity CLI (agy)** → **Install** (runs `irm https://antigravity.google/cli/install.ps1 | iex`).
+2. Click **Sign in**: this opens an interactive `agy` session; finish the sign-in wizard there, then close it.
+3. Save. AgentDesk sends prompts to `agy` as stream-json on stdin and resumes conversations with `--conversation`.
+
+## Validation
+```bash
+node tools/validate.js          # static checks, unit tests, fake-agent integration (~3 s, no AI usage)
+node tools/validate.js --e2e    # plus an Electron UI run with fake agents
+node tools/validate.js --live   # plus real Claude / Codex / Cursor round trips (uses your quota)
+```
+The fake agents live in `tools/validate/fixtures/`. Results are also written to `.claude/validate-last.md`.
 
 ## Building the installer
 ```bash

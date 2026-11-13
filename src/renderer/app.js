@@ -122,7 +122,7 @@ function fillAssistant(node, m) {
   let html = `<div class="who"><span class="badge ${m.agent}">${INITIAL[m.agent]}</span>${LABEL[m.agent]}</div>`;
   html += renderParts(m.parts, m.id);
   if (m.status === 'running') html += `<div class="working"><span class="spinner"></span>${runningLabel(m)}</div>`;
-  if (m.status === 'error' && m.error) html += `<div class="errbox">${esc(t(m.error))}</div>`;
+  if (m.status === 'error' && m.error) html += `<div class="errbox">${esc(t(m.error))}</div>${reloginHtml(m.agent, m.error)}`;
   if (m.status === 'stopped') html += `<div class="stopped">■ ${esc(t(m.error || '已停止'))}</div>`;
   node.innerHTML = html;
   for (const d of node.querySelectorAll('details')) if (open.has(d.dataset.key)) d.open = true;
@@ -154,7 +154,7 @@ function renderParts(parts, key) {
       const st = t({ running: '執行中…', done: '完成', error: '失敗', stopped: '已停止' }[p.status] || p.status);
       html += `<details class="part delegate ${p.agent}" data-key="${k}" ${p.status === 'running' ? 'data-running' : ''}>
         <summary><span class="badge ${p.agent}">${INITIAL[p.agent]}</span><b>${esc(t('交給 {name}', { name: LABEL[p.agent] }))}</b><span class="dstate ${p.status}">${st}</span></summary>
-        <div class="dbody"><div class="dprompt">${esc(p.prompt)}</div>${renderParts(p.parts, k)}${p.error && p.status !== 'stopped' ? `<div class="errbox">${esc(p.error)}</div>` : ''}</div></details>`;
+        <div class="dbody"><div class="dprompt">${esc(p.prompt)}</div>${renderParts(p.parts, k)}${p.error && p.status !== 'stopped' ? `<div class="errbox">${esc(t(p.error))}</div>${reloginHtml(p.agent, p.error)}` : ''}</div></details>`;
     }
   });
   return html;
@@ -300,6 +300,20 @@ document.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault()
 document.addEventListener('drop', e => {
   e.preventDefault(); dragDepth = 0; $('#dropOverlay').classList.add('hidden');
   if ($('#settingsModal').classList.contains('hidden')) addFiles([...(e.dataTransfer?.files || [])]);
+});
+
+// ---------- 登入過期 ----------
+const AUTH_ERR = /log ?in|sign ?in|auth|oauth|token|expired|credential|unauthori[sz]ed|\b401\b|api key|未登入|登入/i;
+function reloginHtml(agentId, error) {
+  if (!error || !AUTH_ERR.test(error) || !settings?.agents[agentId]) return '';
+  return `<button class="btn relogin" data-relogin="${agentId}">${esc(t('重新登入 {name}', { name: LABEL[agentId] }))}</button>`;
+}
+$('#messages').addEventListener('click', async e => {
+  const b = e.target.closest('[data-relogin]');
+  if (!b) return;
+  const a = b.dataset.relogin;
+  try { await api.cliLogin(a, settings.agents[a]); b.textContent = t('已開啟登入視窗，完成後回來重新送出。'); b.disabled = true; }
+  catch (err) { alert(t(String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))); }
 });
 
 // ---------- 圖片：本機路徑轉 file://，點擊放大 ----------
@@ -512,6 +526,13 @@ $('#deleteConv').onclick = async () => {
 
 // ---------- 自訂 Agent ----------
 const CUSTOM_PRESETS = {
+  antigravity: {
+    title: 'Antigravity CLI（agy，取代 Gemini CLI）', name: 'Antigravity', color: '#4f8ef7', cli: 'agy',
+    args: '--output-format stream-json --input-format stream-json --dangerously-skip-permissions',
+    promptMode: 'stream-json', promptFlag: '', format: 'antigravity', modelFlag: '--model', resumeFlag: '--conversation',
+    versionArgs: '--version', statusArgs: '', loginArgs: '*', installCmd: 'irm https://antigravity.google/cli/install.ps1 | iex',
+    doc: 'https://antigravity.google/docs/cli/headless', description: 'Google Antigravity CLI (Gemini)',
+  },
   gemini: {
     title: 'Gemini CLI', name: 'Gemini', color: '#4f8ef7', cli: 'gemini', args: '--output-format stream-json --yolo',
     promptMode: 'stdin', promptFlag: '', format: 'gemini', modelFlag: '-m', resumeFlag: '',
@@ -529,7 +550,7 @@ const CUSTOM_PRESETS = {
     versionArgs: '--version', statusArgs: '', loginArgs: '', installCmd: '', doc: '', description: '',
   },
 };
-const FORMATS = [['text', '純文字：stdout 直接當回覆（任何 CLI 都能用）'], ['claude', 'Claude 相容 stream-json（看得到工具與即時串流）'], ['gemini', 'Gemini CLI stream-json']];
+const FORMATS = [['text', '純文字：stdout 直接當回覆（任何 CLI 都能用）'], ['claude', 'Claude 相容 stream-json（看得到工具與即時串流）'], ['antigravity', 'Antigravity CLI stream-json（agy）'], ['gemini', 'Gemini CLI stream-json']];
 const trOpts = list => list.map(([v, label]) => [v, t(label)]);
 const safeColor = c => /^#[0-9a-f]{3,8}$/i.test(c || '') ? c : '#8a8a92';
 
@@ -558,7 +579,7 @@ function customSettingsHtml(a) {
     <label class="row"><span>${t('額外參數')}</span><input data-k="args" value="${v('args')}" placeholder="${t('例如 --output-format stream-json --yolo')}"></label>
     <div class="hint">${t('以空白分隔，含空白的參數用雙引號包起來；<code>{cwd}</code> 會換成對話的工作資料夾。')}</div>
     <label class="row"><span>${t('Prompt 傳入')}</span><div class="inline">
-      <select data-k="promptMode">${opt(trOpts([['stdin', '從 stdin 傳入'], ['arg', '接在參數最後']]), c.promptMode)}</select>
+      <select data-k="promptMode">${opt(trOpts([['stdin', '從 stdin 傳入'], ['arg', '接在參數最後'], ['stream-json', '一行 JSON 從 stdin 傳入（agy）']]), c.promptMode)}</select>
       <input data-k="promptFlag" value="${v('promptFlag')}" placeholder="${t('前面加的旗標，例如 -p（可空）')}"></div></label>
     <label class="row"><span>${t('輸出格式')}</span><select data-k="format">${opt(trOpts(FORMATS), c.format)}</select></label>
     <label class="row"><span>${t('預設模型')}</span><div class="inline"><input data-k="model" value="${v('model')}" placeholder="${t('留空＝CLI 預設')}"><input data-k="modelFlag" value="${v('modelFlag')}" placeholder="${t('模型旗標，例如 -m')}" class="narrow"></div></label>
@@ -568,7 +589,7 @@ function customSettingsHtml(a) {
     <details class="adv"><summary>${t('進階：偵測、安裝、登入')}</summary>
       <label class="row"><span>${t('版本參數')}</span><input data-k="versionArgs" value="${v('versionArgs')}" placeholder="--version"></label>
       <label class="row"><span>${t('登入狀態參數')}</span><input data-k="statusArgs" value="${v('statusArgs')}" placeholder="${t('例如 auth status（可空）')}"></label>
-      <label class="row"><span>${t('登入參數')}</span><input data-k="loginArgs" value="${v('loginArgs')}" placeholder="${t('例如 login（可空）')}"></label>
+      <label class="row"><span>${t('登入參數')}</span><input data-k="loginArgs" value="${v('loginArgs')}" placeholder="${t('例如 login；填 * 代表直接開啟互動模式登入')}"></label>
       <label class="row"><span>${t('安裝指令')}</span><input data-k="installCmd" value="${v('installCmd')}" placeholder="${t('PowerShell 指令，例如 npm install -g …')}"></label>
       <label class="row"><span>${t('說明網址')}</span><input data-k="doc" value="${v('doc')}" placeholder="https://…"></label>
     </details>
@@ -614,6 +635,7 @@ function connHtml(a) {
     if (r.canLogin) btns.push(`<button class="btn primary" data-act="login">${t('登入')}</button>`);
   } else if (r.loggedIn === null) pill = `<span class="pill ok">${t('已找到 CLI')}</span>`;
   else pill = `<span class="pill ok">${r.account ? esc(t('已連結：{account}', { account: r.account })) : t('已連結')}</span>`;
+  if (r?.found && r.loggedIn !== false && r.canLogin) btns.push(`<button class="btn" data-act="login">${t('重新登入')}</button>`);
   btns.push(`<button class="btn" data-act="check">${t('重新偵測')}</button>`, `<button class="btn" data-act="browse">${t('指定路徑…')}</button>`);
   if (r?.install?.doc) btns.push(`<button class="btn link" data-act="doc">${t('說明')}</button>`);
   const where = r?.found ? `<div class="conn-path" title="${esc(r.path)}">${esc(r.version)} · ${esc(r.path)}</div>`
@@ -752,8 +774,9 @@ $('#settingsModal').onclick = async e => {
         pollUntil(a, r => r.found);
       }
     } else if (act === 'login') {
-      await api.cliLogin(a, form.agents[a]);
-      pollUntil(a, r => r.found && r.loggedIn);
+      try { await api.cliLogin(a, form.agents[a]); }
+      catch (err) { $('#setMsg').textContent = t('{name}：{error}', { name: LABEL[a], error: t(String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')) }); return; }
+      pollUntil(a, r => r.found && r.loggedIn !== false);
     } else if (act === 'browse') {
       const p = await api.cliBrowse();
       if (p) {

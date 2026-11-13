@@ -206,6 +206,14 @@
     '（附件）': '(attachments)',
     '…（略）': '… (truncated)',
 
+    'Antigravity CLI（agy，取代 Gemini CLI）': 'Antigravity CLI (agy, replaces Gemini CLI)',
+    'Antigravity CLI stream-json（agy）': 'Antigravity CLI stream-json (agy)',
+    '一行 JSON 從 stdin 傳入（agy）': 'One JSON line via stdin (agy)',
+    '例如 login；填 * 代表直接開啟互動模式登入': 'e.g. login; use * to open an interactive session to sign in',
+    '重新登入': 'Sign in again',
+    '重新登入 {name}': 'Sign in to {name} again',
+    '已開啟登入視窗，完成後回來重新送出。': 'A sign-in window opened. Send your message again when you are done.',
+
     // ---- 主程序 ----
     '找不到對話': 'Chat not found',
     '這個對話還在執行中': 'This chat is still running',

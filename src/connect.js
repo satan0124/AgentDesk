@@ -89,11 +89,26 @@ async function doCheck(agent, cfg) {
 }
 
 // 開一個看得見的 PowerShell 視窗執行（安裝與登入都需要使用者看著或在瀏覽器確認）
+// 開一個看得見的 PowerShell 視窗。
+// 不能用 spawn(..., { detached: true })：Windows 上那是 DETACHED_PROCESS，主控台程式拿不到視窗，畫面上什麼都不會出現。
+// 改成把指令寫進暫存 .ps1（UTF-8 BOM，中文不亂碼），再用 cmd 的 start 開新視窗執行；腳本跑完會刪掉自己。
 function openTerminal(title, script) {
-  const full = `$Host.UI.RawUI.WindowTitle = ${ps(title)}; ${script}; Write-Host ''; Write-Host ${ps(tr('完成後可以關閉這個視窗，回到 AgentDesk 按「重新偵測」。'))} -ForegroundColor Cyan`;
-  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', full],
-    { detached: true, stdio: 'ignore', windowsHide: false });
-  child.unref();
+  const os = require('os'), fs = require('fs'), path = require('path');
+  const file = path.join(os.tmpdir(), `agentdesk-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.ps1`);
+  const body = [
+    `$Host.UI.RawUI.WindowTitle = ${ps(title)}`,
+    'try {',
+    `  ${script}`,
+    '} finally {',
+    "  Write-Host ''",
+    `  Write-Host ${ps(tr('完成後可以關閉這個視窗，回到 AgentDesk 按「重新偵測」。'))} -ForegroundColor Cyan`,
+    '  Remove-Item -LiteralPath $PSCommandPath -ErrorAction SilentlyContinue',
+    '}',
+  ].join('\r\n');
+  fs.writeFileSync(file, '\ufeff' + body, 'utf8');
+  spawn('cmd.exe', ['/d', '/c', 'start', '""', 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', file],
+    { stdio: 'ignore', windowsHide: true }).unref();
+  return file;
 }
 
 function install(agent, cfg = {}) {
@@ -106,8 +121,9 @@ async function login(agent, cfg = {}) {
   clearCache(); await refreshPath();
   const base = resolveCli(cfg.cli || agent);
   if (!base) throw new Error(tr('還沒找到 CLI，請先安裝或指定路徑'));
-  const args = cfg.custom ? splitArgs(cfg.loginArgs) : LOGIN[agent];
-  if (!args?.length) throw new Error(tr('這個 Agent 沒有設定登入參數'));
+  const raw = cfg.custom ? String(cfg.loginArgs || '').trim() : null;
+  const args = cfg.custom ? (raw === '*' ? [] : splitArgs(raw)) : LOGIN[agent];
+  if (cfg.custom ? !raw : !args?.length) throw new Error(tr('這個 Agent 沒有設定登入參數'));
   openTerminal(tr('登入 {name}', { name: cfg.name || INSTALL[agent]?.label || agent }), `& ${[...base, ...args].map(ps).join(' ')}`);
 }
 

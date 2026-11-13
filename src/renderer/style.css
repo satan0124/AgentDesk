@@ -246,3 +246,5 @@ details.adv { margin-top: 6px; border-top: 1px dashed var(--line); padding-top: 
 details.adv summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 4px 0; }
 .add-custom { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 10px; }
 .add-custom select { background: #1b1b1e; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; outline: none; flex: 1; }
+
+.btn.relogin { margin-top: 8px; }

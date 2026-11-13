@@ -369,7 +369,7 @@ ipcMain.handle('dialog:folder', async (_, current) => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], defaultPath: current });
   return r.canceled ? null : r.filePaths[0];
 });
-ipcMain.handle('open:path', (_, p) => shell.openPath(p));
+ipcMain.handle('open:path', (_, p) => (p && fs.existsSync(p) ? shell.openPath(p) : 'not found'));
 ipcMain.handle('open:url', (_, u) => { if (/^https:\/\//.test(u)) shell.openExternal(u); });
 ipcMain.handle('cli:check', (_, agent, cfg, force) => connect.check(agent, cfg, force));
 ipcMain.handle('cli:install', (_, agent, cfg) => connect.install(agent, cfg));
@@ -394,7 +394,10 @@ function createWindow() {
   // 主視窗只顯示 index.html：任何跳頁都攔下（網址開瀏覽器、本機檔案用系統程式開），避免整個視窗被換成別的檔案回不來
   const openOutside = url => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
-    else if (/^file:/i.test(url)) { try { shell.openPath(require('url').fileURLToPath(url)); } catch {} }
+    else if (/^file:/i.test(url)) {
+      // 檔案不存在就不開：shell.openPath 會跳出 Windows 錯誤對話框，還會讓程式關不掉
+      try { const p = require('url').fileURLToPath(url); if (fs.existsSync(p)) shell.openPath(p); } catch {}
+    }
   };
   win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e, url) => {

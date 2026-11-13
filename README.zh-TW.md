@@ -40,7 +40,7 @@ npm start
 - **圖片**：回覆中的圖片縮到欄寬，點擊放大預覽（滾輪縮放、拖曳平移、←/→ 換張、Esc 關閉）。
 - **右欄 Agent 工作狀況**：每個 Agent 是閒置還是工作中、在哪個對話、正在做什麼、經過多久，以及最近完成的工作。
 - **連結 CLI**：設定頁偵測每個 CLI 是否安裝、版本、登入帳號；可安裝、登入、指定路徑。
-- **自訂 Agent**：設定頁最下方「＋ 新增自訂 Agent」，範本有 Gemini CLI、Claude 相容 stream-json、一般 CLI（純文字）。可設指令、參數、prompt 傳入方式、輸出格式、模型、接續 session 旗標、給 Claude 的說明等。
+- **自訂 Agent**：設定頁最下方「＋ 新增自訂 Agent」，範本有 Antigravity CLI（`agy`，取代 Gemini CLI）、Gemini CLI、Claude 相容 stream-json、一般 CLI（純文字）。可設指令、參數、prompt 傳入方式、輸出格式、模型、接續 session 旗標、給 Claude 的說明等。
 - **語言**：介面有繁體中文與英文。預設跟隨系統：繁體中文系統用繁中，其他一律英文；可在設定切換。
 
 ## 權限提醒
@@ -59,6 +59,20 @@ Agent 會在對話的工作資料夾裡讀寫檔案、執行指令。預設權�
 - `src/shared/i18n.js`：介面語言對照。
 - `src/renderer/`：介面。
 - `tools/make-icon.js`：從 `build/icon.svg` 產生 icon。
+
+## 使用 Gemini／Antigravity
+Google 已用 Antigravity CLI（`agy`）取代 Gemini CLI，Antigravity 桌面版本身不含這個 CLI，要另外裝：
+1. 設定 →「＋ 新增自訂 Agent」→ 範本選「Antigravity CLI（agy）」→ 按「安裝」（執行 `irm https://antigravity.google/cli/install.ps1 | iex`）。
+2. 按「登入」：會開一個互動模式的 `agy`，在裡面完成登入精靈後關掉。
+3. 儲存。AgentDesk 用 stdin 的 stream-json 傳 prompt 給 `agy`，並用 `--conversation` 接續對話。
+
+## 驗證
+```bash
+node tools/validate.js          # 靜態檢查、單元測試、假 Agent 整合（約 3 秒，不花額度）
+node tools/validate.js --e2e    # 再加 Electron 畫面測試（假 Agent）
+node tools/validate.js --live   # 再加真的 Claude／Codex／Cursor 兩輪接續（會用額度）
+```
+假 Agent 放在 `tools/validate/fixtures/`，結果也會寫到 `.claude/validate-last.md`。
 
 ## 打包安裝檔
 ```bash

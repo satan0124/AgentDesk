@@ -36,6 +36,11 @@ function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, 
     args.push(...splitArgs(cfg.args).map(a => a.split('{cwd}').join(cwd)));
     if (cfg.model && cfg.modelFlag) args.push(cfg.modelFlag, cfg.model);
     if (sessionId && cfg.resumeFlag) args.push(cfg.resumeFlag, sessionId);
+    if (cfg.promptMode === 'stream-json') {
+      // agy 等：stdin 一行 JSON {"event":"user","message":{"content":"…"}}，避開命令列長度上限
+      return { file: base[0], args: [...base.slice(1), ...args], cwd,
+        stdin: JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n' };
+    }
     if (cfg.promptMode === 'arg') {
       // 透過 cmd.exe 啟動時把整段 prompt 當參數會被 cmd 解讀特殊字元，只允許 stdin
       if (/cmd\.exe$/i.test(base[0])) throw new Error(tr('{name} 是 .cmd/.bat 啟動，prompt 只能用 stdin 傳入（請到設定改）', { name: labelOf(agent, cfg) }));
@@ -247,7 +252,40 @@ function geminiParser(emit, state) {
   };
 }
 
-const PARSERS = { claude: claudeParser, codex: codexParser, cursor: cursorParser, gemini: geminiParser };
+// Antigravity CLI（agy）--output-format stream-json：init / step_update / result（欄位放在同名子物件裡）
+function antigravityParser(emit, state) {
+  return evt => {
+    const kind = evt.event || evt.type;
+    if (kind === 'init') {
+      const id = evt.conversation_id || evt.init?.conversation_id;
+      if (id) emit({ type: 'session', id, model: evt.init?.model });
+    } else if (kind === 'step_update') {
+      const s = evt.step_update || evt;
+      const type = String(s.step_type || '').toLowerCase();
+      if (s.text_delta && (type === 'agent_response' || type === '' || type === 'response')) {
+        state.streamed = true;
+        emit({ type: 'text', text: s.text_delta });
+      } else if (type === 'tool' || s.tool_name || s.tool_info) {
+        const info = s.tool_info || {};
+        const name = s.tool_name || info.name || 'tool';
+        const id = `${s.conversation_id || ''}#${s.step_index}`;
+        const done = String(s.state).toUpperCase() === 'DONE';
+        emit({ type: 'tool', id, name, detail: toolDetail(name, info.parameters || {}),
+          status: done ? (info.error ? 'error' : 'done') : 'running',
+          output: done ? short(info.error?.message ?? info.output ?? '', 2000) : undefined });
+      }
+    } else if (kind === 'result') {
+      const r = evt.result || evt;
+      if (r.conversation_id) emit({ type: 'session', id: r.conversation_id });
+      const status = String(r.status || '').toUpperCase();
+      if (status && status !== 'SUCCESS') state.error = r.error || status;
+      if (!state.streamed && r.response) emit({ type: 'text', text: r.response });
+      state.usage = r.usage;
+    }
+  };
+}
+
+const PARSERS = { claude: claudeParser, codex: codexParser, cursor: cursorParser, gemini: geminiParser, antigravity: antigravityParser };
 
 // ---------- 執行 ----------
 function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt, env, onEvent, images, addDirs, allowedTools }) {
@@ -346,3 +384,5 @@ function listModels(agent, cfg) {
 }
 
 module.exports = { runAgent, listModels, LABEL, labelOf };
+// 給 tools/validate.js 做單元測試用
+module.exports._test = { PARSERS, buildCommand, cursorModel, splitArgs };

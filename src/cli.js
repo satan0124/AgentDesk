@@ -81,6 +81,7 @@ function resolveCli(name) {
 function knownLocations(name) {
   const home = process.env.USERPROFILE || '', local = process.env.LOCALAPPDATA || '', roaming = process.env.APPDATA || '';
   const dirs = [path.join(home, '.local', 'bin'), path.join(roaming, 'npm'), path.join(local, 'cursor-agent'),
+    path.join(local, 'Antigravity'),
     path.join(local, 'Microsoft', 'WinGet', 'Links')];
   const out = [];
   for (const d of dirs) for (const ext of ['.exe', '.cmd']) {
