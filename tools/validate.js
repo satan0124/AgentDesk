@@ -379,13 +379,17 @@ async function e2eTests() {
     return `存檔 ${r.saveMs}ms`;
   });
   await check('畫面：圖片預覽能開能關、主視窗不會被導走', () => assert(r.lightbox && r.navigationBlocked, JSON.stringify({ lightbox: r.lightbox, nav: r.navigationBlocked })));
+  await check('畫面：側欄右鍵選單、釘選、封存、依專案分類', () => assert(
+    ['pin', 'rename', 'archive', 'delete'].every(a => r.ctxItems?.includes(a)) && !r.ctxCjk.length && !r.viewCjk
+      && r.pinned && r.archived && r.unarchived && r.projectView,
+    JSON.stringify({ items: r.ctxItems, cjk: r.ctxCjk, viewCjk: r.viewCjk, pinned: r.pinned, archived: r.archived, unarchived: r.unarchived, project: r.projectView })));
   // 簡中：只有繁體才有的字（出現在繁中原文、但沒出現在任何簡中翻譯裡）不應留在畫面上
   const { CN } = require(path.join(SRC, 'shared', 'i18n.js'));
   const simp = new Set([...Object.values(CN).join('')]);
   const trad = [...new Set([...Object.keys(CN).join('')])].filter(ch => CJK.test(ch) && !simp.has(ch));
   const rc = await launch('zh-CN', [['xecho', 'hello'], ['xagy', 'first']], `[${trad.join('')}]`);
-  if (rc) await check('畫面：簡中介面沒有殘留繁體字', () => assert(rc.uiLang === 'zh-CN' && !rc.cjkLeft.length && !rc.settingsCjk.length,
-    `${rc.uiLang} ${[...rc.cjkLeft, ...rc.settingsCjk].join('；')}`));
+  if (rc) await check('畫面：簡中介面沒有殘留繁體字', () => assert(rc.uiLang === 'zh-CN' && !rc.cjkLeft.length && !rc.settingsCjk.length && !rc.ctxCjk.length && !rc.viewCjk,
+    `${rc.uiLang} ${[...rc.cjkLeft, ...rc.settingsCjk, ...rc.ctxCjk].join('；')}${rc.viewCjk ? '；分類切換鈕' : ''}`));
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 

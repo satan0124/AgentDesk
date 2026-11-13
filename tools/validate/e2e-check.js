@@ -47,7 +47,33 @@
   const lbOpen = !document.querySelector('#lightbox').classList.contains('hidden');
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   out.lightbox = lbOpen && document.querySelector('#lightbox').classList.contains('hidden');
-  // 6) 主視窗不能被導走
+  // 6) 側欄：右鍵選單、釘選、封存、依專案分類
+  const id = current.id;
+  const item = () => document.querySelector(`#convList li.conv[data-id="${id}"]`);
+  const menu = document.querySelector('#ctxMenu');
+  const rightClick = () => item().dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 60, clientY: 140 }));
+  rightClick();
+  out.ctxItems = [...menu.querySelectorAll('button')].map(b => b.dataset.act);
+  out.ctxCjk = [...menu.querySelectorAll('button')].map(b => b.textContent).filter(x => CJK.test(x));
+  menu.querySelector('[data-act="pin"]').click();
+  await wait(400);
+  const firstLabel = document.querySelector('#convList li.day')?.textContent;
+  out.pinned = !!(await api.getConv(id)).pinned && firstLabel === t('已釘選');
+  rightClick();
+  menu.querySelector('[data-act="archive"]').click();
+  await wait(400);
+  const toggle = document.querySelector('#convList .arch-toggle');
+  out.archived = !!(await api.getConv(id)).archived && !item() && !!toggle && !CJK.test(toggle.textContent);
+  toggle.click();
+  rightClick();
+  menu.querySelector('[data-act="unarchive"]').click();
+  await wait(400);
+  out.unarchived = !(await api.getConv(id)).archived && !!item();
+  document.querySelector('#viewToggle').click();
+  out.projectView = document.querySelectorAll('#convList .proj').length > 0 && !!document.querySelector('#convList li.conv.sub');
+  out.viewCjk = CJK.test(document.querySelector('#viewToggle').textContent);
+  document.querySelector('#viewToggle').click();
+  // 7) 主視窗不能被導走
   const before = location.href;
   location.href = 'file:///C:/__agentdesk_validate__/x.png';
   await wait(600);

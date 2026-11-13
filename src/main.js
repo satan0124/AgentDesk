@@ -79,7 +79,8 @@ function listConvs() {
     if (!f.endsWith('.json')) continue;
     const id = f.slice(0, -5);
     const c = convs.get(id) || (() => { try { return JSON.parse(fs.readFileSync(path.join(CONV_DIR, f), 'utf8')); } catch { return null; } })();
-    if (c) out.push({ id: c.id, title: c.title, updated: c.updated, cwd: c.cwd, running: running.has(c.id) });
+    if (c) out.push({ id: c.id, title: c.title, updated: c.updated, cwd: c.cwd, running: running.has(c.id),
+      pinned: !!c.pinned, archived: !!c.archived });
   }
   return out.sort((a, b) => b.updated - a.updated);
 }
@@ -350,7 +351,11 @@ ipcMain.handle('conv:update', (_, id, patch) => {
   }
   if (typeof patch.cwd === 'string') c.cwd = patch.cwd;
   if (patch.resetSessions) c.sessions = {};
-  saveConv(c); send('conv:changed', listConvs());
+  // 釘選、封存不算對話有新動靜，不改排序用的更新時間
+  if (typeof patch.pinned === 'boolean') c.pinned = patch.pinned;
+  if (typeof patch.archived === 'boolean') { c.archived = patch.archived; if (c.archived) c.pinned = false; }
+  const touch = typeof patch.cwd === 'string' || !!patch.resetSessions;
+  saveConv(c, touch); send('conv:changed', listConvs());
   return c;
 });
 ipcMain.handle('att:add', (_, items) => addAttachments(items || []));

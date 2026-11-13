@@ -32,7 +32,7 @@ After that you can also double-click `AgentDesk.bat` (it runs `npm install` the 
 On first launch, if Claude Code is missing or not signed in, AgentDesk opens Settings so you can click **Install** and **Sign in**.
 
 ## Features
-- **Chats**: chat history on the left (grouped by date, searchable), Ctrl+N for a new chat. Each chat has its own working folder and its own unsent draft.
+- **Chats**: chat history on the left, searchable and grouped by date or by project (working folder), Ctrl+N for a new chat. Right-click a chat to pin, rename, archive or delete it. Each chat has its own working folder and its own unsent draft.
 - **Multiple agents**: only Claude is enabled by default. Add Codex or Cursor in Settings, then switch who you talk to below the input box (Alt+1–9).
 - **Delegation**: Claude hands work to other agents through built-in MCP tools (`ask_<agent>`). Each delegation shows up as a card with that agent's tool calls and reply as they happen.
 - **Shared context**: each chat remembers every agent's session. When you talk to an agent directly, whatever it missed from the other agents is passed along automatically.

@@ -26,7 +26,9 @@ input, textarea, select { font: inherit; color: var(--text); }
 .search { padding: 6px 2px; }
 .search input { width: 100%; background: #1d1d20; border: 1px solid #2a2a2f; border-radius: 8px; padding: 6px 10px; outline: none; }
 .search input:focus { border-color: #44444c; }
-.side-label { color: var(--muted); font-size: 12px; padding: 10px 10px 4px; }
+.side-label { color: var(--muted); font-size: 12px; padding: 10px 6px 4px 10px; display: flex; align-items: center; justify-content: space-between; }
+.view-toggle { border: 0; background: transparent; color: var(--muted); font-size: 11px; padding: 2px 8px; border-radius: 6px; }
+.view-toggle:hover { background: #222226; color: var(--text); }
 #convList { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; }
 #convList li { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; color: #cfccc6; }
 #convList li:hover { background: #1f1f23; }
@@ -35,6 +37,21 @@ input, textarea, select { font: inherit; color: var(--text); }
 #convList .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; flex-shrink: 0; }
 #convList .day { color: #6f6c66; font-size: 11px; padding: 10px 10px 2px; cursor: default; }
 #convList .day:hover { background: none; }
+#convList li.sub { padding-left: 26px; }
+#convList li.archived { color: #7d7a74; }
+#convList .proj { color: #a9a6a0; font-size: 12.5px; padding: 8px 6px 4px 8px; margin-top: 4px; }
+#convList .proj:hover { background: none; color: var(--text); }
+#convList .proj .chev { width: 12px; height: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+#convList .proj .chev::before { content: ''; width: 5px; height: 5px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); transition: transform .12s; }
+#convList .proj.off .chev::before { transform: rotate(-45deg); }
+#convList .proj-new { border: 0; background: transparent; color: var(--muted); padding: 0 6px; border-radius: 6px; visibility: hidden; }
+#convList .proj:hover .proj-new { visibility: visible; }
+#convList .proj-new:hover { background: #2a2a2f; color: var(--text); }
+#convList .arch-toggle { color: #6f6c66; font-size: 11px; margin-top: 8px; }
+#convList .arch-toggle:hover { color: var(--text); background: none; }
+#convList .t[contenteditable="true"] { outline: 1px solid #44444c; border-radius: 4px; padding: 0 4px; text-overflow: clip; background: #1d1d20; }
+.menu.ctx { position: fixed; bottom: auto; min-width: 180px; z-index: 50; }
+.menu .danger { color: var(--err); }
 @keyframes pulse { 50% { opacity: .3; } }
 
 /* ---------- 主區 ---------- */

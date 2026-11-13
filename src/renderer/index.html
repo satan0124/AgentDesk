@@ -10,10 +10,11 @@
   <aside id="sidebar">
     <button id="newConv" class="side-btn"><span class="ico">＋</span>新對話</button>
     <div class="search"><input id="search" placeholder="搜尋對話"></div>
-    <div class="side-label">對話記錄</div>
+    <div class="side-label"><span>對話記錄</span><button id="viewToggle" class="view-toggle" title="切換分類方式：依日期／依專案（工作資料夾）"></button></div>
     <ul id="convList"></ul>
     <button id="openSettings" class="side-btn bottom"><span class="ico">⚙</span>設定</button>
   </aside>
+  <div id="ctxMenu" class="menu ctx hidden"></div>
 
   <main id="main">
     <header id="topbar">

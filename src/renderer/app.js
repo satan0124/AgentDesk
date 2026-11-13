@@ -39,19 +39,124 @@ function modelLine(a) {
 }
 
 // ---------- 側欄 ----------
+// 分類方式（依日期／依專案＝工作資料夾）與專案收合狀態，各台電腦自己記
+let sideView = 'date', collapsed = {}, showArchived = false;
+try {
+  sideView = localStorage.getItem('sideView') === 'project' ? 'project' : 'date';
+  collapsed = JSON.parse(localStorage.getItem('collapsed') || '{}') || {};
+} catch {}
+function saveSide() { try { localStorage.setItem('sideView', sideView); localStorage.setItem('collapsed', JSON.stringify(collapsed)); } catch {} }
+const projKey = p => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
+const baseName = p => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(p || '');
+
+function convItem(c, sub) {
+  const cls = ['conv', current?.id === c.id && 'on', c.archived && 'archived', sub && 'sub'].filter(Boolean).join(' ');
+  const li = el(`<li class="${cls}" data-id="${c.id}" title="${esc(c.cwd)}">${c.running ? '<span class="dot"></span>' : ''}<span class="t">${esc(t(c.title))}</span></li>`);
+  li.onclick = () => { if (!li.querySelector('.t[contenteditable="true"]')) openConv(c.id); };
+  li.oncontextmenu = e => { e.preventDefault(); showConvMenu(c, e.clientX, e.clientY); };
+  return li;
+}
+
 function renderList() {
   const q = $('#search').value.trim().toLowerCase();
   const ul = $('#convList'); ul.innerHTML = '';
-  let lastDay = null;
-  for (const c of convList) {
-    if (q && !c.title.toLowerCase().includes(q)) continue;
-    const day = dayLabel(c.updated);
-    if (day !== lastDay) { ul.appendChild(el(`<li class="day">${day}</li>`)); lastDay = day; }
-    const li = el(`<li class="${current?.id === c.id ? 'on' : ''}" title="${esc(c.cwd)}">${c.running ? '<span class="dot"></span>' : ''}<span class="t">${esc(t(c.title))}</span></li>`);
-    li.onclick = () => openConv(c.id);
-    ul.appendChild(li);
+  $('#viewToggle').textContent = t(sideView === 'project' ? '依專案' : '依日期');
+  const match = c => !q || c.title.toLowerCase().includes(q) || t(c.title).toLowerCase().includes(q);
+  const live = convList.filter(c => !c.archived && match(c));
+  const pinned = live.filter(c => c.pinned), rest = live.filter(c => !c.pinned);
+  if (pinned.length) {
+    ul.appendChild(el(`<li class="day">${esc(t('已釘選'))}</li>`));
+    for (const c of pinned) ul.appendChild(convItem(c));
+  }
+  if (sideView === 'project') {
+    const groups = new Map();
+    for (const c of rest) {
+      const k = projKey(c.cwd);
+      if (!groups.has(k)) groups.set(k, { cwd: c.cwd, items: [] });
+      groups.get(k).items.push(c);
+    }
+    for (const [k, g] of groups) {
+      const off = !q && collapsed[k];
+      const h = el(`<li class="proj${off ? ' off' : ''}" title="${esc(g.cwd)}"><span class="chev"></span><span class="t">${esc(baseName(g.cwd))}</span><button class="proj-new" title="${esc(t('在這個資料夾開新對話'))}">＋</button></li>`);
+      h.onclick = e => {
+        if (e.target.closest('.proj-new')) return newConvIn(g.cwd);
+        if (collapsed[k]) delete collapsed[k]; else collapsed[k] = true;
+        saveSide(); renderList();
+      };
+      ul.appendChild(h);
+      if (!off) for (const c of g.items) ul.appendChild(convItem(c, true));
+    }
+  } else {
+    let lastDay = null;
+    for (const c of rest) {
+      const day = dayLabel(c.updated);
+      if (day !== lastDay) { ul.appendChild(el(`<li class="day">${day}</li>`)); lastDay = day; }
+      ul.appendChild(convItem(c));
+    }
+  }
+  const arch = convList.filter(c => c.archived && match(c));
+  if (arch.length) {
+    const h = el(`<li class="arch-toggle">${esc(showArchived ? t('隱藏已封存') : t('已封存（{n}）', { n: arch.length }))}</li>`);
+    h.onclick = () => { showArchived = !showArchived; renderList(); };
+    ul.appendChild(h);
+    if (showArchived) for (const c of arch) ul.appendChild(convItem(c));
   }
 }
+
+// ---------- 對話的右鍵選單 ----------
+let menuConv = null;
+function hideCtx() { $('#ctxMenu').classList.add('hidden'); menuConv = null; }
+function showConvMenu(c, x, y) {
+  const items = c.archived
+    ? [['unarchive', '取消封存', 'A'], ['rename', '重新命名', 'R'], ['delete', '刪除', 'D']]
+    : [[c.pinned ? 'unpin' : 'pin', c.pinned ? '取消釘選' : '釘選', 'P'], ['rename', '重新命名', 'R'], ['archive', '封存', 'A'], ['delete', '刪除', 'D']];
+  const m = $('#ctxMenu');
+  m.innerHTML = items.map(([act, label, key]) => `<button data-act="${act}" data-key="${key}"${act === 'delete' ? ' class="danger"' : ''}>${esc(t(label))}<kbd>${key}</kbd></button>`).join('');
+  m.classList.remove('hidden');
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 6)) + 'px';
+  m.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 6)) + 'px';
+  menuConv = c;
+}
+async function convAction(act, c) {
+  hideCtx();
+  if (!c) return;
+  if (act === 'pin' || act === 'unpin') await api.updateConv(c.id, { pinned: act === 'pin' });
+  else if (act === 'archive' || act === 'unarchive') await api.updateConv(c.id, { archived: act === 'archive' });
+  else if (act === 'rename') renameInList(c);
+  else if (act === 'delete') await deleteConvById(c.id, c.title);
+}
+function renameInList(c) {
+  const box = $(`#convList li[data-id="${c.id}"] .t`);
+  if (!box) return;
+  box.textContent = t(c.title);
+  box.contentEditable = 'true'; box.focus();
+  document.getSelection().selectAllChildren(box);
+  let cancel = false;
+  box.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); box.blur(); }
+    if (e.key === 'Escape') { cancel = true; box.blur(); }
+  };
+  box.onblur = async () => {
+    box.contentEditable = 'false'; box.onblur = null;
+    const title = box.textContent.trim();
+    if (cancel || !title || title === t(c.title)) return renderList();
+    if (current?.id === c.id) { current.title = title; $('#convTitle').textContent = title; }
+    await api.updateConv(c.id, { title });
+  };
+}
+$('#ctxMenu').onclick = e => { const b = e.target.closest('button'); if (b) convAction(b.dataset.act, menuConv); };
+document.addEventListener('mousedown', e => { if (!e.target.closest('#ctxMenu')) hideCtx(); }, true);
+window.addEventListener('blur', hideCtx);
+document.addEventListener('keydown', e => {
+  if ($('#ctxMenu').classList.contains('hidden')) return;
+  e.preventDefault(); e.stopPropagation();
+  if (e.key === 'Escape') return hideCtx();
+  const b = $(`#ctxMenu button[data-key="${e.key.toUpperCase()}"]`);
+  if (b) convAction(b.dataset.act, menuConv);
+}, true);
+$('#viewToggle').onclick = () => { sideView = sideView === 'project' ? 'date' : 'project'; saveSide(); renderList(); };
 
 async function refreshList(list) { convList = list || await api.listConvs(); renderList(); }
 
@@ -88,10 +193,12 @@ async function openConv(id) {
   $('#input').focus();
 }
 
-async function newConv() {
-  const c = await api.createConv(current?.cwd || settings.defaultCwd);
+async function newConvIn(cwd) {
+  const c = await api.createConv(cwd || settings.defaultCwd);
   await openConv(c.id);
 }
+const newConv = () => newConvIn(current?.cwd);
+const firstConv = () => convList.find(c => !c.archived) || convList[0];
 
 function isRunning() { return current?.messages.some(m => m.role === 'assistant' && m.status === 'running'); }
 
@@ -514,15 +621,16 @@ $('#resetSessions').onclick = async () => {
   if (!current || !confirm(t('讓 Claude / Codex / Cursor 下一次都開新 session？\n畫面上的對話記錄會保留，並在下一次送出時當作參考帶給 Agent。'))) return;
   current = await api.updateConv(current.id, { resetSessions: true });
 };
-$('#deleteConv').onclick = async () => {
-  if (!current || !confirm(t('刪除「{title}」？此動作無法復原。', { title: t(current.title) }))) return;
-  await api.deleteConv(current.id);
-  delete drafts[current.id];
-  current = null;
-  loadDraft();
+async function deleteConvById(id, title) {
+  if (!confirm(t('刪除「{title}」？此動作無法復原。', { title: t(title) }))) return;
+  await api.deleteConv(id);
+  delete drafts[id];
+  if (current?.id === id) { current = null; loadDraft(); }
   await refreshList();
-  if (convList[0]) openConv(convList[0].id); else renderConv();
-};
+  if (!current) { const next = firstConv(); if (next) openConv(next.id); else renderConv(); }
+  else renderList();
+}
+$('#deleteConv').onclick = () => current && deleteConvById(current.id, current.title);
 
 // ---------- 自訂 Agent ----------
 const CUSTOM_PRESETS = {
@@ -849,6 +957,6 @@ async function firstRunCheck() {
   agentStatus = await api.agentStatus();
   renderAgentPanel();
   await refreshList();
-  if (convList[0]) await openConv(convList[0].id); else { loadDraft(); renderConv(); }
+  if (firstConv()) await openConv(firstConv().id); else { loadDraft(); renderConv(); }
   firstRunCheck();
 })();
