@@ -33,9 +33,20 @@ function dayLabel(ts) {
   if (diff === 0) return t('今天'); if (diff === 1) return t('昨天'); if (diff < 7) return t('過去 7 天'); if (diff < 30) return t('過去 30 天');
   return `${d.getFullYear()}/${d.getMonth() + 1}`;
 }
+// 模型清單（id、顯示名稱）：Claude 啟動時就讀，Codex／Cursor 第一次用到才讀
+const modelLists = {};
+const modelName = (a, id) => modelLists[a]?.labels?.[id] || id;
+// 這個對話實際用的設定：對話自己指定的模型／強度蓋過設定裡的預設
+function effCfg(a, conv = current) {
+  const c = { ...settings.agents[a] };
+  const o = conv?.agentCfg?.[a] || {};
+  if (typeof o.model === 'string') c.model = o.model;
+  if (typeof o.effort === 'string') c.effort = o.effort;
+  return c;
+}
 function modelLine(a) {
-  const c = settings.agents[a];
-  return [c.model || t('預設模型'), c.effort ? t('強度 {effort}', { effort: c.effort }) : null].filter(Boolean).join(' · ');
+  const c = effCfg(a);
+  return [c.model ? modelName(a, c.model) : t('預設模型'), c.effort ? t('強度 {effort}', { effort: c.effort }) : null].filter(Boolean).join(' · ');
 }
 
 // ---------- 側欄 ----------
@@ -214,6 +225,7 @@ function renderConv() {
   for (const m of current?.messages || []) box.appendChild(renderMsg(m));
   $('#empty').classList.toggle('hidden', !!current?.messages.length);
   updateComposer();
+  if (settings) renderAgentPanel();
   box.scrollTop = box.scrollHeight;
 }
 
@@ -570,32 +582,120 @@ function ago(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
   return s < 60 ? t('剛剛') : s < 3600 ? t('{m} 分鐘前', { m: Math.floor(s / 60) }) : s < 86400 ? t('{h} 小時前', { h: Math.floor(s / 3600) }) : new Date(ts).toLocaleDateString();
 }
+// 剩餘額度：Claude 每次回覆後更新、Codex 由 app-server 讀，Cursor CLI 沒有提供
+const WIN_LABEL = { five_hour: '5 小時', seven_day: '每週' };
+function untilText(sec) {
+  const m = Math.max(0, Math.round((sec * 1000 - Date.now()) / 60000));
+  return m < 60 ? t('{m} 分鐘後', { m }) : m < 1440 ? t('{h} 小時 {m} 分後', { h: Math.floor(m / 60), m: m % 60 }) : t('{d} 天 {h} 小時後', { d: Math.floor(m / 1440), h: Math.floor(m % 1440 / 60) });
+}
+function quotaHtml(a) {
+  if (a === 'cursor') return `<div class="quota note">${t('Cursor CLI 不提供剩餘額度')}</div>`;
+  const q = agentStatus.limits?.[a];
+  if (!q?.windows?.length) return a === 'claude' ? `<div class="quota note">${t('額度：Claude 回覆一次後顯示')}</div>` : a === 'codex' ? `<div class="quota note">${t('額度：還沒讀到')}</div>` : '';
+  return `<div class="quota">${q.windows.map(w => {
+    const reset = w.resetsAt && w.resetsAt * 1000 < Date.now();   // 已過重置時間，舊數字不準，視為用量歸零
+    const left = Math.max(0, 100 - (reset ? 0 : w.used));
+    const tip = reset ? '' : w.resetsAt ? t('已用 {used}%，{when}重置', { used: w.used, when: untilText(w.resetsAt) }) : '';
+    return `<div class="qrow" title="${esc(tip)}"><span class="ql">${esc(t(WIN_LABEL[w.kind] || w.kind))}</span><span class="qbar"><i class="${left < 20 ? 'low' : ''}" style="width:${left}%"></i></span><span class="qv">${t('剩 {n}%', { n: left })}</span></div>`;
+  }).join('')}</div>`;
+}
+// 右欄只看目前這個對話的 Agent
 function renderAgentPanel() {
-  const run = agentStatus.running;
+  const cid = current?.id;
+  const run = agentStatus.running.filter(j => j.convId === cid);
   $('#panelCount').textContent = run.length ? t('{n} 個工作中', { n: run.length }) : '';
   $('#agentCards').innerHTML = enabledAgents().map(a => {
     const mine = run.filter(j => j.agent === a);
-    const jobs = mine.map(j => `<div class="job" data-conv="${j.convId}" title="${esc(j.prompt)}">
-        <div class="jt"><span class="role">${j.role === 'delegate' ? t('Claude 委派') : t('主對話')}</span><span class="t">${esc(t(j.convTitle))}</span><span class="tm">${elapsed(Date.now() - j.startedAt)}</span></div>
+    const jobs = mine.map(j => `<div class="job" title="${esc(j.prompt)}">
+        <div class="jt"><span class="role">${j.role === 'delegate' ? t('Claude 委派') : t('主對話')}</span><span class="t">${esc(j.prompt)}</span><span class="tm">${elapsed(Date.now() - j.startedAt)}</span></div>
         <div class="act">${esc(t(j.activity))}</div></div>`).join('');
-    return `<div class="acard ${mine.length ? 'busy' : ''}">
+    const c = settings?.agents[a];
+    const switchable = c && !c.custom;
+    const model = !settings ? '' : switchable
+      ? `<button class="model-btn" data-model="${a}" title="${esc(t('切換這個對話用的模型與強度'))}"><span class="t">${esc(modelLine(a))}</span><span class="caret"></span></button>`
+      : `<div class="model">${esc(modelLine(a))}</div>`;
+    return `<div class="acard ${mine.length ? 'busy' : ''}" data-agent="${a}">
       <div class="acard-head"><span class="badge ${a}">${INITIAL[a]}</span><span class="nm">${LABEL[a]}</span>
         <span class="st ${mine.length ? 'busy' : ''}">${mine.length ? (mine.length > 1 ? t('工作中 ×{n}', { n: mine.length }) : t('工作中')) : t('閒置')}</span></div>
-      ${settings ? `<div class="model">${esc(modelLine(a))}</div>` : ''}${jobs}</div>`;
+      ${model}${quotaHtml(a)}${jobs}</div>`;
   }).join('');
-  const fin = agentStatus.finished;
+  const fin = agentStatus.finished.filter(j => j.convId === cid).slice(0, 12);
   const icon = { done: '✓', error: '✕', stopped: '■' };
-  $('#recentJobs').innerHTML = fin.length ? fin.map(j => `<li data-conv="${j.convId}" title="${esc(j.prompt)}">
+  $('#recentJobs').innerHTML = fin.length ? fin.map(j => `<li title="${esc(j.prompt)}">
       <span class="ic ${j.status}">${icon[j.status] || '·'}</span>
-      <div class="body"><div class="l1"><b>${LABEL[j.agent]}</b><span class="t">${esc(t(j.convTitle))}</span></div>
+      <div class="body"><div class="l1"><b>${LABEL[j.agent]}</b><span class="t">${esc(j.prompt)}</span></div>
       <div class="l2">${esc(t(j.activity))} · ${elapsed(j.endedAt - j.startedAt)} · ${ago(j.endedAt)}</div></div></li>`).join('')
-    : `<li class="empty">${t('還沒有完成的工作')}</li>`;
+    : `<li class="empty">${t('這個對話還沒有完成的工作')}</li>`;
 }
-for (const sel of ['#agentCards', '#recentJobs']) $(sel).addEventListener('click', e => {
-  const id = e.target.closest('[data-conv]')?.dataset.conv;
-  if (id && convList.some(c => c.id === id)) openConv(id);
-});
 api.on('agents:status', st => { agentStatus = st; renderAgentPanel(); });
+
+// ---------- 右欄卡片：切換這個對話的模型與強度 ----------
+let modelMenuAgent = null, modelMenuMore = false;
+const modelErrors = {};
+function hideModelMenu() { $('#modelMenu').classList.add('hidden'); modelMenuAgent = null; }
+async function loadModels(a) {
+  if (modelLists[a]) return modelLists[a];
+  const r = await api.listModels(a, settings.agents[a]);
+  if (r.models?.length) { modelLists[a] = r; delete modelErrors[a]; } else modelErrors[a] = r.error || '讀不到模型清單';
+  return r;
+}
+function renderModelMenu() {
+  const a = modelMenuAgent, m = $('#modelMenu');
+  if (!a || !current) return;
+  const base = settings.agents[a], eff = effCfg(a), L = modelLists[a];
+  const ck = on => on ? '<span class="ck">✓</span>' : '';
+  const item = id => `<button data-m="${esc(id)}" title="${esc(id)}"><span class="nm">${esc(modelName(a, id))}</span>${ck(eff.model === id)}</button>`;
+  const own = current.agentCfg?.[a] || {};
+  let html = `<div class="sec">${esc(t('模型（只套用在這個對話）'))}</div>
+    <button data-m=""><span class="nm">${esc(t('預設（設定：{model}）', { model: base.model ? modelName(a, base.model) : t('CLI 預設') }))}</span>${ck(typeof own.model !== 'string')}</button>`;
+  if (!L) html += `<div class="sec">${esc(modelErrors[a] ? t(modelErrors[a]) : t('讀取模型清單中…'))}</div>`;
+  else {
+    html += L.models.map(item).join('');
+    if (L.more?.length) {
+      html += `<button data-more class="more">${esc(t('更多模型'))}<span class="chev${modelMenuMore ? ' open' : ''}"></span></button>`;
+      if (modelMenuMore) html += `<div class="sub">${L.more.map(item).join('')}</div>`;
+    }
+    if (eff.model && typeof own.model === 'string' && ![...L.models, ...(L.more || [])].includes(eff.model)) html += item(eff.model);
+  }
+  if (EFFORTS[a]) {
+    html += `<hr><div class="sec">${esc(t('強度'))}</div>
+      <button data-e=""><span class="nm">${esc(t('預設（設定：{model}）', { model: base.effort || t('CLI 預設') }))}</span>${ck(typeof own.effort !== 'string')}</button>`
+      + EFFORTS[a].map(e => `<button data-e="${e}"><span class="nm">${e}</span>${ck(typeof own.effort === 'string' && eff.effort === e)}</button>`).join('');
+  }
+  m.innerHTML = html;
+}
+async function showModelMenu(a, btn) {
+  modelMenuAgent = a; modelMenuMore = false;
+  const m = $('#modelMenu');
+  renderModelMenu();
+  m.classList.remove('hidden');
+  const r = btn.getBoundingClientRect();
+  m.style.left = Math.max(6, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px';
+  m.style.top = Math.max(6, Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8)) + 'px';
+  if (!modelLists[a]) { delete modelErrors[a]; await loadModels(a); if (modelMenuAgent === a) renderModelMenu(); }
+}
+async function setConvAgentCfg(a, patch) {
+  if (!current) return;
+  current = await api.updateConv(current.id, { agentCfg: { [a]: patch } });
+  renderAgentPanel(); updateComposer();
+}
+$('#agentCards').addEventListener('click', e => {
+  const b = e.target.closest('.model-btn');
+  if (!b) return;
+  e.stopPropagation();
+  if (modelMenuAgent === b.dataset.model) hideModelMenu(); else showModelMenu(b.dataset.model, b);
+});
+$('#modelMenu').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const a = modelMenuAgent;
+  if ('more' in b.dataset) { modelMenuMore = !modelMenuMore; return renderModelMenu(); }
+  if ('m' in b.dataset) setConvAgentCfg(a, { model: b.dataset.m || null });
+  else if ('e' in b.dataset) setConvAgentCfg(a, { effort: b.dataset.e || null });
+  hideModelMenu();
+});
+document.addEventListener('mousedown', e => { if (!e.target.closest('#modelMenu, .model-btn')) hideModelMenu(); }, true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideModelMenu(); });
+window.addEventListener('blur', hideModelMenu);
 const panelOn = () => !document.body.classList.contains('panel-off');
 setInterval(() => { if (agentStatus.running.length && panelOn()) renderAgentPanel(); }, 1000);
 setInterval(() => { if (panelOn()) renderAgentPanel(); }, 30000);
@@ -666,17 +766,11 @@ $('#deleteConv').onclick = () => current && deleteConvById(current.id, current.t
 // ---------- 自訂 Agent ----------
 const CUSTOM_PRESETS = {
   antigravity: {
-    title: 'Antigravity CLI（agy，取代 Gemini CLI）', name: 'Antigravity', color: '#4f8ef7', cli: 'agy',
+    title: 'Antigravity CLI（agy）', name: 'Antigravity', color: '#4f8ef7', cli: 'agy',
     args: '--output-format stream-json --input-format stream-json --dangerously-skip-permissions',
     promptMode: 'stream-json', promptFlag: '', format: 'antigravity', modelFlag: '--model', resumeFlag: '--conversation',
     versionArgs: '--version', statusArgs: '', loginArgs: '*', installCmd: 'irm https://antigravity.google/cli/install.ps1 | iex',
     doc: 'https://antigravity.google/docs/cli/headless', description: 'Google Antigravity CLI (Gemini)',
-  },
-  gemini: {
-    title: 'Gemini CLI', name: 'Gemini', color: '#4f8ef7', cli: 'gemini', args: '--output-format stream-json --yolo',
-    promptMode: 'stdin', promptFlag: '', format: 'gemini', modelFlag: '-m', resumeFlag: '',
-    versionArgs: '--version', statusArgs: '', loginArgs: '', installCmd: 'npm install -g @google/gemini-cli',
-    doc: 'https://geminicli.com/docs/cli/headless', description: 'Google Gemini CLI',
   },
   claudejson: {
     title: 'Claude 相容格式（stream-json）', name: '自訂 Agent', color: '#e0a458', cli: '', args: '-p --output-format stream-json --verbose',
@@ -689,7 +783,11 @@ const CUSTOM_PRESETS = {
     versionArgs: '--version', statusArgs: '', loginArgs: '', installCmd: '', doc: '', description: '',
   },
 };
-const FORMATS = [['text', '純文字：stdout 直接當回覆（任何 CLI 都能用）'], ['claude', 'Claude 相容 stream-json（看得到工具與即時串流）'], ['antigravity', 'Antigravity CLI stream-json（agy）'], ['gemini', 'Gemini CLI stream-json']];
+// Gemini CLI 已由 Antigravity CLI 取代，不再列出；舊設定還在用的才顯示
+const FORMATS = [['text', '純文字：stdout 直接當回覆（任何 CLI 都能用）'], ['claude', 'Claude 相容 stream-json（看得到工具與即時串流）'], ['antigravity', 'Antigravity CLI stream-json（agy）']];
+const formatsFor = cur => cur === 'gemini' ? [...FORMATS, ['gemini', 'Gemini CLI stream-json']] : FORMATS;
+// Codex、Cursor 預設不加入，跟自訂 Agent 一樣從「新增其他 CLI Agent」加
+const BUILTIN_ADD = [['codex', 'Codex CLI（OpenAI）'], ['cursor', 'Cursor Agent CLI']];
 const trOpts = list => list.map(([v, label]) => [v, t(label)]);
 const safeColor = c => /^#[0-9a-f]{3,8}$/i.test(c || '') ? c : '#8a8a92';
 
@@ -720,7 +818,7 @@ function customSettingsHtml(a) {
     <label class="row"><span>${t('Prompt 傳入')}</span><div class="inline">
       <select data-k="promptMode">${opt(trOpts([['stdin', '從 stdin 傳入'], ['arg', '接在參數最後'], ['stream-json', '一行 JSON 從 stdin 傳入（agy）']]), c.promptMode)}</select>
       <input data-k="promptFlag" value="${v('promptFlag')}" placeholder="${t('前面加的旗標，例如 -p（可空）')}"></div></label>
-    <label class="row"><span>${t('輸出格式')}</span><select data-k="format">${opt(trOpts(FORMATS), c.format)}</select></label>
+    <label class="row"><span>${t('輸出格式')}</span><select data-k="format">${opt(trOpts(formatsFor(c.format)), c.format)}</select></label>
     <label class="row"><span>${t('預設模型')}</span><div class="inline"><input data-k="model" value="${v('model')}" placeholder="${t('留空＝CLI 預設')}"><input data-k="modelFlag" value="${v('modelFlag')}" placeholder="${t('模型旗標，例如 -m')}" class="narrow"></div></label>
     <label class="row"><span>${t('接續 session 旗標')}</span><input data-k="resumeFlag" value="${v('resumeFlag')}" placeholder="${t('例如 --resume；留空＝每次重開，自動附上對話記錄')}"></label>
     <label class="row"><span>${t('給 Claude 的說明')}</span><input data-k="description" value="${v('description')}" placeholder="${t('它擅長什麼，Claude 決定要不要委派時參考')}"></label>
@@ -738,8 +836,8 @@ function customSettingsHtml(a) {
 function addCustomHtml() {
   return `<div class="add-custom">
     <span class="muted">${t('新增其他 CLI Agent：')}</span>
-    <select id="customPreset">${Object.entries(CUSTOM_PRESETS).map(([k, p]) => `<option value="${k}">${t(p.title)}</option>`).join('')}</select>
-    <button class="btn primary" data-act="addCustom">${t('＋ 新增自訂 Agent')}</button>
+    <select id="customPreset">${BUILTIN_ADD.filter(([a]) => !form.agents[a]?.enabled).map(([a, title]) => `<option value="builtin:${a}">${t(title)}</option>`).join('')}${Object.entries(CUSTOM_PRESETS).map(([k, p]) => `<option value="${k}">${t(p.title)}</option>`).join('')}</select>
+    <button class="btn primary" data-act="addCustom">${t('＋ 新增 Agent')}</button>
   </div>`;
 }
 
@@ -751,13 +849,7 @@ function newCustomId() {
 
 // ---------- 設定 ----------
 const allAgents = () => Object.keys(settings?.agents || {});
-const DESC_ZH = {
-  claude: 'Anthropic Claude Code，主要對話。',
-  codex: 'OpenAI Codex CLI：可直接對話，或讓 Claude 委派工作。',
-  cursor: 'Cursor Agent CLI：可直接對話，或讓 Claude 委派工作。',
-};
 const enabledAgents = () => allAgents().filter(a => settings?.agents[a]?.enabled);
-const DESC = new Proxy(DESC_ZH, { get: (o, k) => t(o[k]) });
 let form = null;                 // 設定視窗裡尚未儲存的副本
 const conn = {};                 // agent -> 偵測結果
 const polls = {};                // agent -> 計時器
@@ -786,12 +878,7 @@ function connHtml(a) {
 function agentSettingsHtml(a) {
   const c = form.agents[a];
   if (c.custom) return customSettingsHtml(a);
-  if (!c.enabled) {
-    return `<section class="set-group off" data-agent="${a}">
-      <h3><span class="badge ${a}">${INITIAL[a]}</span>${LABEL[a]}<span class="muted">${t('未加入')}</span><span class="spacer"></span>
-        <button class="btn primary" data-act="enable">${t('＋ 加入')}</button></h3>
-      <div class="muted">${DESC[a]}</div></section>`;
-  }
+  if (!c.enabled) return '';
   const effort = [`<option value="">${t('預設（CLI 自己決定）')}</option>`, ...EFFORTS[a].map(e => `<option ${c.effort === e ? 'selected' : ''}>${e}</option>`)].join('');
   const permKey = a === 'codex' ? 'sandbox' : 'permission';
   const perms = PERMS[a].map(([v, label]) => `<option value="${v}" ${c[permKey] === v ? 'selected' : ''}>${t(label)}</option>`).join('');
@@ -800,12 +887,23 @@ function agentSettingsHtml(a) {
       ${a === 'claude' ? '' : `<button class="btn subtle" data-act="disable">${t('移除')}</button>`}</h3>
     <div class="conn-wrap" data-conn="${a}">${connHtml(a)}</div>
     <label class="row"><span>${t('CLI 指令')}</span><input data-k="cli" value="${esc(c.cli)}" placeholder="${a === 'cursor' ? 'agent' : a}"></label>
-    <label class="row"><span>${t('預設模型')}</span><div class="inline"><input data-k="model" list="models-${a}" value="${esc(c.model)}" placeholder="${t('留空＝CLI 預設')}"><button class="btn" data-load="${a}">${t('讀取清單')}</button></div></label>
-    <datalist id="models-${a}"></datalist>
+    <label class="row"><span>${t('預設模型')}</span><div class="inline">${modelFieldHtml(a, c)}</div></label>
     <label class="row"><span>${t('強度')}</span><select data-k="effort">${effort}</select></label>
     ${a === 'cursor' ? `<div class="hint">${t('Cursor 的強度會組成 模型[effort=…]；模型 id 本身已含強度（例如 -high）時不另外加。')}</div>` : ''}
     <label class="row"><span>${a === 'codex' ? t('沙箱') : t('權限')}</span><select data-k="${permKey}">${perms}</select></label>
   </section>`;
+}
+
+// 有清單就用下拉選單（原本的 datalist 會依欄位內容過濾，只看得到目前那一個）；還沒讀過清單就先給輸入框
+function modelFieldHtml(a, c) {
+  const L = modelLists[a];
+  if (!L) return `<input data-k="model" value="${esc(c.model)}" placeholder="${t('留空＝CLI 預設')}"><button class="btn" data-load="${a}">${t('讀取清單')}</button>`;
+  const opt = id => `<option value="${esc(id)}" ${c.model === id ? 'selected' : ''}>${esc(L.labels?.[id] && L.labels[id] !== id ? `${L.labels[id]}（${id}）` : id)}</option>`;
+  const known = [...L.models, ...(L.more || [])];
+  return `<select data-k="model"><option value="">${t('預設（CLI 自己決定）')}</option>${c.model && !known.includes(c.model) ? opt(c.model) : ''}
+    <optgroup label="${esc(t(L.more ? '常用' : '可用模型'))}">${L.models.map(opt).join('')}</optgroup>
+    ${L.more?.length ? `<optgroup label="${esc(t('更多模型'))}">${L.more.map(opt).join('')}</optgroup>` : ''}</select>
+    ${a === 'claude' ? '' : `<button class="btn" data-load="${a}">${t('重新讀取')}</button>`}`;
 }
 
 function syncForm() {
@@ -877,7 +975,17 @@ $('#settingsModal').onclick = async e => {
   if (act === 'addCustom') {
     e.preventDefault();
     syncForm();
-    const { title, ...preset } = CUSTOM_PRESETS[$('#customPreset').value] || CUSTOM_PRESETS.text;
+    const pick = $('#customPreset').value;
+    if (pick.startsWith('builtin:')) {
+      const b = pick.slice(8);
+      form.agents[b].enabled = true;
+      renderAgentSettings();
+      checkCli(b);
+      document.querySelector(`section[data-agent="${b}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      $('#setMsg').textContent = t('已加入 {name}，按「儲存」後生效', { name: LABEL[b] });
+      return;
+    }
+    const { title, ...preset } = CUSTOM_PRESETS[pick] || CUSTOM_PRESETS.text;
     const id = newCustomId();
     form.agents[id] = { ...preset, name: t(preset.name), custom: true, enabled: true, delegate: true };
     renderAgentSettings();
@@ -933,9 +1041,9 @@ $('#settingsModal').onclick = async e => {
     const b = e.target; b.disabled = true; b.textContent = t('讀取中…');
     const r = await api.listModels(la, readSettingsForm().agents[la]);
     b.disabled = false; b.textContent = t('讀取清單');
-    $(`#models-${la}`).innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join('');
-    $('#setMsg').textContent = r.error ? t('{name}：{error}', { name: LABEL[la], error: t(r.error) }) : t('{name}：{n} 個模型，點模型欄位可選', { name: LABEL[la], n: r.models.length });
-    b.closest('.inline').querySelector('input').focus();
+    if (r.models?.length) { modelLists[la] = r; renderAgentSettings(); }
+    $('#setMsg').textContent = r.error ? t('{name}：{error}', { name: LABEL[la], error: t(r.error) }) : t('{name}：{n} 個模型，點模型欄位可選', { name: LABEL[la], n: r.models.length + (r.more?.length || 0) });
+    document.querySelector(`section[data-agent="${la}"] [data-k="model"]`)?.focus();
   }
 };
 // 改了 CLI 指令欄就重新偵測
@@ -982,6 +1090,7 @@ async function firstRunCheck() {
 (async () => {
   settings = await api.getSettings();
   I18n.setLang(settings.uiLang);
+  await loadModels('claude');
   translateDom(document.body);
   renderAgentStyles();
   renderPicker();

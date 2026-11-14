@@ -211,6 +211,26 @@ body.panel-off #agentPanel { display: none; }
 .acard-head .st.busy { color: var(--accent2); }
 .acard-head .st.busy::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; }
 .acard .model { font-size: 11px; color: #77746e; margin: 2px 0 0 30px; }
+.model-btn { display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 26px); margin: 2px 0 0 26px; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; font-size: 11px; color: #a9a59d; }
+.model-btn:hover { border-color: var(--line); background: #232327; color: var(--text); }
+.model-btn .t { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.model-btn .caret { width: 5px; height: 5px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: translateY(-1px) rotate(45deg); flex-shrink: 0; }
+.quota { margin: 5px 0 0 32px; display: grid; gap: 3px; }
+.quota.note { font-size: 10.5px; color: #66635d; display: block; }
+.qrow { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #8d8a83; }
+.qrow .ql { width: 40px; flex-shrink: 0; }
+.qrow .qbar { flex: 1; height: 4px; border-radius: 2px; background: #2a2a2f; overflow: hidden; }
+.qrow .qbar i { display: block; height: 100%; background: #6aa77c; border-radius: 2px; }
+.qrow .qbar i.low { background: var(--err); }
+.qrow .qv { width: 50px; text-align: right; flex-shrink: 0; }
+#modelMenu { min-width: 220px; max-width: 300px; max-height: 70vh; overflow-y: auto; }
+#modelMenu .sec { color: var(--muted); font-size: 11.5px; padding: 6px 10px 3px; }
+#modelMenu hr { border: 0; border-top: 1px solid var(--line); margin: 5px 4px; }
+#modelMenu .nm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#modelMenu .ck { margin-left: auto; color: var(--accent2); padding-left: 12px; }
+#modelMenu .more .chev { margin-left: auto; width: 6px; height: 6px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
+#modelMenu .more .chev.open { transform: rotate(45deg); }
+#modelMenu .sub button { padding-left: 22px; }
 .job { margin-top: 8px; padding: 7px 8px; background: #232327; border-radius: 8px; cursor: pointer; }
 .job:hover { background: #29292e; }
 .job .jt { display: flex; gap: 6px; font-size: 12px; align-items: baseline; }

@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { runAgent, listModels, labelOf: labelOfCfg } = require('./agents');
+const { runAgent, listModels, readLimits, labelOf: labelOfCfg } = require('./agents');
 const { clearCache } = require('./cli');
 const connect = require('./connect');
 const i18n = require('./shared/i18n');
@@ -19,6 +19,7 @@ fs.mkdirSync(path.join(DATA, 'attachments'), { recursive: true });
 // 轉成長路徑：Claude 的 --add-dir 對 8.3 短路徑（SATAN0~1）比對不到
 const ATT_DIR = fs.realpathSync.native(path.join(DATA, 'attachments'));
 const SETTINGS_FILE = path.join(DATA, 'settings.json');
+const LIMITS_FILE = path.join(DATA, 'limits.json');
 const BRIDGE = path.join(DATA, 'mcp-bridge.js');
 fs.mkdirSync(CONV_DIR, { recursive: true });
 fs.mkdirSync(MCP_DIR, { recursive: true });
@@ -126,6 +127,14 @@ function buildPrompt(conv, agent, text, history) {
 }
 
 const labelOf = agent => labelOfCfg(agent, settings.agents[agent]);
+// 每個對話可以各自指定模型與強度（右欄卡片切換），沒指定的照設定
+function cfgFor(conv, agent) {
+  const c = { ...settings.agents[agent] };
+  const o = conv?.agentCfg?.[agent] || {};
+  if (typeof o.model === 'string') c.model = o.model;
+  if (typeof o.effort === 'string') c.effort = o.effort;
+  return c;
+}
 // 可以讓 Claude 委派的 Agent：已加入、不是 Claude、沒有關掉「可委派」
 const helpers = () => Object.keys(settings.agents)
   .filter(a => a !== 'claude' && settings.agents[a]?.enabled && settings.agents[a]?.delegate !== false);
@@ -154,12 +163,26 @@ function mcpConfigFor(convId) {
 const jobs = new Map();          // jobId -> job
 const finished = [];             // 最近完成，新的在前
 let jobsTimer = null;
+const agentStatus = () => ({ running: [...jobs.values()], finished, limits });
 function publishJobs() {
   if (jobsTimer) return;
-  jobsTimer = setTimeout(() => {
-    jobsTimer = null;
-    send('agents:status', { running: [...jobs.values()], finished: finished.slice(0, 12) });
-  }, 200);
+  jobsTimer = setTimeout(() => { jobsTimer = null; send('agents:status', agentStatus()); }, 200);
+}
+
+// ---------- 剩餘額度（右欄卡片） ----------
+let limits = {};
+try { limits = JSON.parse(fs.readFileSync(LIMITS_FILE, 'utf8')) || {}; } catch {}
+function setLimits(agent, { windows, plan }) {
+  if (!windows?.length) return;
+  limits[agent] = { windows, plan, at: Date.now() };
+  try { fs.writeFileSync(LIMITS_FILE, JSON.stringify(limits)); } catch {}
+  publishJobs();
+}
+let codexLimitsAt = 0;
+async function refreshCodexLimits(force) {
+  if (!settings.agents.codex?.enabled || (!force && Date.now() - codexLimitsAt < 60000)) return;
+  codexLimitsAt = Date.now();
+  setLimits('codex', await readLimits('codex', settings.agents.codex));
 }
 function startJob(agent, conv, role, prompt) {
   const job = { id: crypto.randomUUID(), agent, convId: conv.id, convTitle: conv.title, role,
@@ -180,9 +203,10 @@ function trackEvent(job, ev) {
 }
 function endJob(job, error) {
   jobs.delete(job.id);
+  if (job.agent === 'codex') refreshCodexLimits(true);
   finished.unshift({ ...job, endedAt: Date.now(), status: error ? (error === '已停止' ? 'stopped' : 'error') : 'done',
     activity: error ? String(error).split('\n')[0].slice(0, 120) : job.tools ? tr('完成（{n} 個工具）', { n: job.tools }) : tr('完成') });
-  finished.length = Math.min(finished.length, 30);
+  finished.length = Math.min(finished.length, 200);   // 右欄只看目前對話，留多一點
   publishJobs();
 }
 
@@ -247,7 +271,7 @@ async function startTurn(convId, agent, text, attachments = []) {
   running.set(convId, ctx);
   send('conv:changed', listConvs());
 
-  const cfg = settings.agents[agent];
+  const cfg = cfgFor(conv, agent);
   const job = startJob(agent, conv, 'main', text || tr('（附件）'));
   ctx.job = job;
   const prompt = buildPrompt(conv, agent, (text || tr('請看附件。')) + attachText(atts), history);
@@ -256,6 +280,7 @@ async function startTurn(convId, agent, text, attachments = []) {
     addDirs: [...new Set(atts.map(a => a.kind === 'folder' ? a.path : path.dirname(a.path)))],
     onEvent: ev => {
     if (ev.type === 'session') { if (ev.id) conv.sessions[agent] = ev.id; return; }
+    if (ev.type === 'limits') return setLimits(agent, ev);
     trackEvent(job, ev);
     emitTo(conv, msg, ev);
   } };
@@ -294,8 +319,9 @@ async function delegate({ conv: convId, agent, prompt, newSession }) {
   if (ctx.job) trackEvent(ctx.job, { type: 'delegate_start', agent });
   const job = startJob(agent, conv, 'delegate', prompt);
   if (newSession) delete conv.sessions[agent];
-  const run = runAgent(agent, settings.agents[agent], { prompt, cwd: conv.cwd, sessionId: conv.sessions[agent], onEvent: ev => {
+  const run = runAgent(agent, cfgFor(conv, agent), { prompt, cwd: conv.cwd, sessionId: conv.sessions[agent], onEvent: ev => {
     if (ev.type === 'session') { if (ev.id) conv.sessions[agent] = ev.id; return; }
+    if (ev.type === 'limits') return setLimits(agent, ev);
     trackEvent(job, ev);
     emitTo(conv, msg, { ...ev, del: id });
   } });
@@ -354,6 +380,16 @@ ipcMain.handle('conv:update', (_, id, patch) => {
   // 釘選、封存不算對話有新動靜，不改排序用的更新時間
   if (typeof patch.pinned === 'boolean') c.pinned = patch.pinned;
   if (typeof patch.archived === 'boolean') { c.archived = patch.archived; if (c.archived) c.pinned = false; }
+  // 這個對話用的模型／強度：字串＝指定，null＝回到設定的預設
+  if (patch.agentCfg && typeof patch.agentCfg === 'object') {
+    const all = { ...(c.agentCfg || {}) };
+    for (const [a, v] of Object.entries(patch.agentCfg)) {
+      const cur = { ...(all[a] || {}) };
+      for (const k of ['model', 'effort']) if (v && k in v) { if (typeof v[k] === 'string') cur[k] = v[k]; else delete cur[k]; }
+      if (Object.keys(cur).length) all[a] = cur; else delete all[a];
+    }
+    c.agentCfg = all;
+  }
   const touch = typeof patch.cwd === 'string' || !!patch.resetSessions;
   saveConv(c, touch); send('conv:changed', listConvs());
   return c;
@@ -365,7 +401,7 @@ ipcMain.handle('chat:send', (_, convId, agent, text, atts) => {
 ipcMain.handle('chat:stop', (_, convId) => { const ctx = running.get(convId); if (ctx) for (const s of ctx.stops) s(); });
 ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('settings:set', (_, s) => { delete s.uiLang; settings = s; saveSettings(); clearCache(); applyLang(); return publicSettings(); });
-ipcMain.handle('models:list', (_, agent, cfg) => { clearCache(); return listModels(agent, cfg || settings.agents[agent]); });
+ipcMain.handle('models:list', (_, agent, cfg) => { if (agent !== 'claude') clearCache(); return listModels(agent, cfg || settings.agents[agent]); });
 ipcMain.handle('dialog:files', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] });
   return r.canceled ? [] : addAttachments(r.filePaths.map(p => ({ path: p })));
@@ -385,7 +421,7 @@ ipcMain.handle('cli:browse', async () => {
   return r.canceled ? null : r.filePaths[0];
 });
 ipcMain.handle('open:reveal', (_, p) => shell.showItemInFolder(p));
-ipcMain.handle('agents:status', () => ({ running: [...jobs.values()], finished: finished.slice(0, 12) }));
+ipcMain.handle('agents:status', () => agentStatus());
 
 // ---------- 視窗 ----------
 function createWindow() {
@@ -427,6 +463,8 @@ app.whenReady().then(async () => {
   }
   await startServer();
   createWindow();
+  // Codex 額度：啟動時讀一次，之後每 5 分鐘（右欄打開時才會用到，讀不到就算了）
+  if (!process.env.AGENTDESK_SELFTEST) { setTimeout(refreshCodexLimits, 3000); setInterval(refreshCodexLimits, 300000); }
   if (process.env.AGENTDESK_SELFTEST) require('./selftest')({ app, getWin: () => win, newConv, startTurn, getConv, addAttachments });
 });
 

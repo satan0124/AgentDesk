@@ -124,6 +124,11 @@ function claudeParser(emit, state) {
           }
         }
         break;
+      case 'rate_limit_event': {
+        const windows = claudeWindows(evt.rate_limit_info);
+        if (windows.length) emit({ type: 'limits', windows });
+        break;
+      }
       case 'result':
         state.final = evt.result;
         if (evt.session_id) emit({ type: 'session', id: evt.session_id });
@@ -340,31 +345,36 @@ function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt,
   return { promise, stop: () => { state.stopped = true; killTree(child); } };
 }
 
-// ---------- 可用模型 ----------
-const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku', 'fable', 'claude-opus-5-5', 'claude-sonnet-5-5',
-  'claude-haiku-5-5', 'claude-fable-5-2'];
+// ---------- 剩餘額度 ----------
+// 統一成 [{ kind: 'five_hour' | 'seven_day' | '<分鐘>m', used: 已用百分比, resetsAt: 重置時間（秒） }]
+function claudeWindows(info) {
+  const w = info?.unifiedWindows || {};
+  const out = ['five_hour', 'seven_day'].filter(k => w[k])
+    .map(k => ({ kind: k, used: Math.round((w[k].utilization || 0) * 100), resetsAt: w[k].resetsAt }));
+  if (!out.length && info?.rateLimitType && typeof info.utilization === 'number') {
+    out.push({ kind: info.rateLimitType, used: Math.round(info.utilization * 100), resetsAt: info.resetsAt });
+  }
+  return out;
+}
+function codexWindows(rl) {
+  return ['primary', 'secondary'].map(k => rl?.[k]).filter(w => w && typeof w.usedPercent === 'number').map(w => ({
+    kind: w.windowDurationMins === 300 ? 'five_hour' : w.windowDurationMins === 10080 ? 'seven_day' : `${w.windowDurationMins}m`,
+    used: Math.round(w.usedPercent), resetsAt: w.resetsAt,
+  }));
+}
 
-function listModels(agent, cfg) {
+// Codex app-server：JSON-RPC 問一個問題就關掉
+function codexRpc(cfg, method, params, ms = 20000) {
   return new Promise(resolve => {
-    if (cfg?.custom) return resolve({ models: [], error: tr('自訂 Agent 沒有模型清單，請直接輸入模型名稱') });
-    if (agent === 'claude') return resolve({ models: CLAUDE_MODELS });
-    const base = resolveCli(cfg.cli || agent);
-    if (!base) return resolve({ models: [], error: tr('找不到 CLI') });
-    if (agent === 'cursor') {
-      execFile(base[0], [...base.slice(1), 'models'], { windowsHide: true, timeout: 30000, encoding: 'utf8' }, (err, out) => {
-        const models = (out || '').split(/\r?\n/).map(l => l.match(/^([\w.\-\[\]=,]+)\s+-\s+/)?.[1]).filter(Boolean);
-        resolve({ models, error: models.length ? null : (err?.message || tr('讀不到模型清單')) });
-      });
-      return;
-    }
-    // codex：app-server JSON-RPC model/list
+    const base = resolveCli(cfg?.cli || 'codex');
+    if (!base) return resolve({ error: tr('找不到 CLI') });
     const child = spawn(base[0], [...base.slice(1), 'app-server'], { windowsHide: true });
-    const models = [];
     let buf = '', done = false;
-    const finish = (error) => { if (done) return; done = true; killTree(child); resolve({ models, error: models.length ? null : error }); };
-    const send = o => child.stdin.write(JSON.stringify(o) + '\n');
-    const timer = setTimeout(() => finish(tr('逾時')), 20000);
-    child.on('error', e => finish(e.message));
+    const finish = r => { if (done) return; done = true; clearTimeout(timer); killTree(child); resolve(r); };
+    const send = o => { try { child.stdin.write(JSON.stringify(o) + '\n'); } catch {} };
+    const timer = setTimeout(() => finish({ error: tr('逾時') }), ms);
+    child.on('error', e => finish({ error: e.message }));
+    child.stdin.on('error', () => {});
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', d => {
       buf += d;
@@ -372,17 +382,55 @@ function listModels(agent, cfg) {
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         let obj; try { obj = JSON.parse(line); } catch { continue; }
-        if (obj.id === 1) { send({ method: 'initialized', params: {} }); send({ method: 'model/list', id: 2, params: { limit: 100, includeHidden: false } }); }
-        if (obj.id === 2) {
-          for (const m of obj.result?.data || []) if (m.model || m.id) models.push(m.model || m.id);
-          clearTimeout(timer); finish(obj.error ? JSON.stringify(obj.error) : null);
-        }
+        if (obj.id === 1) { send({ method: 'initialized', params: {} }); send({ method, id: 2, params }); }
+        if (obj.id === 2) finish(obj.error ? { error: obj.error.message || JSON.stringify(obj.error) } : { result: obj.result });
       }
     });
     send({ method: 'initialize', id: 1, params: { clientInfo: { name: 'agentdesk', title: 'AgentDesk', version: '0.1.0' } } });
   });
 }
 
-module.exports = { runAgent, listModels, LABEL, labelOf };
+// Claude 的額度跟著每次回覆的 rate_limit_event 更新；Codex 可以隨時問；Cursor CLI 沒有提供
+async function readLimits(agent, cfg) {
+  if (agent !== 'codex' || cfg?.custom) return { windows: [] };
+  const r = await codexRpc(cfg, 'account/rateLimits/read', {});
+  return { windows: codexWindows(r.result?.rateLimits), plan: r.result?.rateLimits?.planType, error: r.error };
+}
+
+// ---------- 可用模型 ----------
+// Claude Code 沒有列模型的指令，清單照 Claude 桌面程式：常用四個，其餘放「更多模型」
+const CLAUDE_MAIN = [['claude-opus-5-5', 'Opus 5.5'], ['claude-fable-5-2', 'Fable 5.2'], ['claude-sonnet-5-5', 'Sonnet 5.5'], ['claude-haiku-5-5', 'Haiku 5.5']];
+const CLAUDE_MORE = [['claude-fable-5-1', 'Fable 5.1'], ['claude-haiku-4-5', 'Haiku 4.5'], ['claude-sonnet-5', 'Sonnet 5'], ['claude-opus-5', 'Opus 5'],
+  ['claude-fable-5', 'Fable 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-opus-4-7', 'Opus 4.7'], ['claude-opus-4-6', 'Opus 4.6'], ['claude-sonnet-4-6', 'Sonnet 4.6']];
+const CLAUDE_ALIAS = [['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['fable', 'Fable']];
+
+function listModels(agent, cfg) {
+  return new Promise(resolve => {
+    if (cfg?.custom) return resolve({ models: [], error: tr('自訂 Agent 沒有模型清單，請直接輸入模型名稱') });
+    if (agent === 'claude') {
+      return resolve({ models: CLAUDE_MAIN.map(m => m[0]), more: CLAUDE_MORE.map(m => m[0]),
+        labels: Object.fromEntries([...CLAUDE_MAIN, ...CLAUDE_MORE, ...CLAUDE_ALIAS]) });
+    }
+    const base = resolveCli(cfg.cli || agent);
+    if (!base) return resolve({ models: [], error: tr('找不到 CLI') });
+    if (agent === 'cursor') {
+      execFile(base[0], [...base.slice(1), 'models'], { windowsHide: true, timeout: 30000, encoding: 'utf8' }, (err, out) => {
+        const rows = stripAnsi(out).split(/\r?\n/).map(l => l.match(/^([\w.\-\[\]=,]+)\s+-\s+(.+?)\s*(?:\((?:current|default)[^)]*\))?\s*$/)).filter(Boolean);
+        const models = rows.map(r => r[1]);
+        resolve({ models, labels: Object.fromEntries(rows.map(r => [r[1], r[2]])), error: models.length ? null : (err?.message || tr('讀不到模型清單')) });
+      });
+      return;
+    }
+    // codex：app-server JSON-RPC model/list
+    codexRpc(cfg, 'model/list', { limit: 100, includeHidden: false }).then(r => {
+      const data = (r.result?.data || []).filter(m => m.model || m.id);
+      const models = data.map(m => m.model || m.id);
+      resolve({ models, labels: Object.fromEntries(data.map(m => [m.model || m.id, m.displayName || m.model || m.id])),
+        error: models.length ? null : (r.error || tr('讀不到模型清單')) });
+    });
+  });
+}
+
+module.exports = { runAgent, listModels, readLimits, LABEL, labelOf };
 // 給 tools/validate.js 做單元測試用
-module.exports._test = { PARSERS, buildCommand, cursorModel, splitArgs };
+module.exports._test = { PARSERS, buildCommand, cursorModel, splitArgs, claudeWindows, codexWindows };

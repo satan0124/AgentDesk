@@ -127,9 +127,13 @@ async function staticChecks() {
     assert(!p.length, p.join('；'));
   });
 
-  await check('打包設定：worker 入口在 asarUnpack、icon 有打包', () => {
+  // exe 只在本機打包（npm run dist），不上傳到 Releases；一般使用者從原始碼執行
+  await check('啟動與打包設定：npm start、AgentDesk.bat、本機打包', () => {
     const pkg = JSON.parse(read('package.json'));
     const b = pkg.build || {};
+    assert(pkg.scripts?.start === 'electron .' && pkg.devDependencies?.electron, 'package.json 缺 start 指令或 electron');
+    assert(/electron\.exe/.test(read('AgentDesk.bat')), 'AgentDesk.bat 沒有啟動 electron');
+    assert(/--publish never/.test(pkg.scripts?.dist || ''), 'dist 指令要加 --publish never（exe 不上傳）');
     assert((b.asarUnpack || []).some(x => /spawner\.js/.test(x)), 'build.asarUnpack 沒有 src/spawner.js（打包後 worker 起不來）');
     assert(/app\.asar\.unpacked/.test(read('src/proc.js')), 'proc.js 沒有改用 app.asar.unpacked 的 spawner');
     assert((b.files || []).some(x => /icon\.ico/.test(x)), 'build.files 沒有 build/icon.ico');
@@ -143,7 +147,7 @@ async function staticChecks() {
 // ======================================================================
 async function unitTests() {
   const agents = require(path.join(SRC, 'agents.js'));
-  const { PARSERS, buildCommand, splitArgs } = agents._test;
+  const { PARSERS, buildCommand, splitArgs, claudeWindows, codexWindows } = agents._test;
   const run = (kind, lines) => {
     const evs = [], state = { texts: 0, streamed: false, hidden: new Set() };
     const parse = PARSERS[kind](e => evs.push(e), state);
@@ -163,6 +167,16 @@ async function unitTests() {
     assert(r.text === 'Hello', `文字=${r.text}`);
     const tools = r.evs.filter(e => e.type === 'tool');
     assert(tools.length === 2 && tools.every(t => t.id === 'a'), `委派工具沒有隱藏：${JSON.stringify(tools)}`);
+  });
+
+  await check('額度：Claude rate_limit_event 與 Codex rateLimits 換算', () => {
+    const r = run('claude', [{ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.24, resetsAt: 100 }, seven_day: { utilization: 0.02, resetsAt: 200 }, seven_day_overage_included: { utilization: 0 } } } }]);
+    const lim = r.evs.find(e => e.type === 'limits');
+    assert(lim && JSON.stringify(lim.windows) === JSON.stringify([{ kind: 'five_hour', used: 24, resetsAt: 100 }, { kind: 'seven_day', used: 2, resetsAt: 200 }]), JSON.stringify(lim));
+    assert(!claudeWindows({}).length, '沒有資料時應該是空的');
+    const cw = codexWindows({ primary: { usedPercent: 21, windowDurationMins: 300, resetsAt: 1 }, secondary: { usedPercent: 73, windowDurationMins: 10080, resetsAt: 2 } });
+    assert(JSON.stringify(cw) === JSON.stringify([{ kind: 'five_hour', used: 21, resetsAt: 1 }, { kind: 'seven_day', used: 73, resetsAt: 2 }]), JSON.stringify(cw));
   });
 
   await check('解析：Codex --json', () => {
@@ -386,13 +400,21 @@ async function e2eTests() {
   await check('畫面：新對話在輸入框上方選資料夾（最近使用）', () => { const p = r.cwdPick || {};
     assert(p.hiddenWithMsgs && p.shown && p.open && p.dirs >= 1 && p.checked === 1 && p.browse && p.closed && !r.cwdPickCjk?.length,
       JSON.stringify({ ...p, cjk: r.cwdPickCjk })); });
+  await check('畫面：右欄卡片切換這個對話的模型與強度（不改設定）', () => { const m = r.convModel || {};
+    assert(m.mainCount >= 5 && m.allCount >= 14 && m.picked === 'claude-sonnet-5-5' && m.effort === 'high' && m.info && m.reset && m.settingsKept && !m.menuCjk?.length,
+      JSON.stringify(m)); });
+  await check('畫面：右欄額度條、只顯示目前對話的工作', () => { const q = r.quota || {};
+    assert(q.rows === 2 && /76/.test(q.text) && /10/.test(q.text) && q.low && !q.cjk && r.panelScoped, JSON.stringify({ ...q, scoped: r.panelScoped })); });
+  await check('畫面：設定頁 Claude 模型清單完整、Codex／Cursor 從新增 Agent 加入、沒有 Gemini', () => { const s = r.settingsModels || {};
+    assert(s.claudeOptions >= 14 && s.presets?.includes('builtin:codex') && s.presets?.includes('builtin:cursor') && !s.presets?.includes('gemini') && !s.builtinShown?.length,
+      JSON.stringify(s)); });
   // 簡中：只有繁體才有的字（出現在繁中原文、但沒出現在任何簡中翻譯裡）不應留在畫面上
   const { CN } = require(path.join(SRC, 'shared', 'i18n.js'));
   const simp = new Set([...Object.values(CN).join('')]);
   const trad = [...new Set([...Object.keys(CN).join('')])].filter(ch => CJK.test(ch) && !simp.has(ch));
   const rc = await launch('zh-CN', [['xecho', 'hello'], ['xagy', 'first']], `[${trad.join('')}]`);
-  if (rc) await check('畫面：簡中介面沒有殘留繁體字', () => assert(rc.uiLang === 'zh-CN' && !rc.cjkLeft.length && !rc.settingsCjk.length && !rc.ctxCjk.length && !rc.viewCjk && !rc.cwdPickCjk?.length,
-    `${rc.uiLang} ${[...rc.cjkLeft, ...rc.settingsCjk, ...rc.ctxCjk, ...(rc.cwdPickCjk || [])].join('；')}${rc.viewCjk ? '；分類切換鈕' : ''}`));
+  if (rc) await check('畫面：簡中介面沒有殘留繁體字', () => assert(rc.uiLang === 'zh-CN' && !rc.cjkLeft.length && !rc.settingsCjk.length && !rc.ctxCjk.length && !rc.viewCjk && !rc.cwdPickCjk?.length && !rc.convModel?.menuCjk?.length && !rc.quota?.cjk,
+    `${rc.uiLang} ${[...rc.cjkLeft, ...rc.settingsCjk, ...rc.ctxCjk, ...(rc.cwdPickCjk || []), ...(rc.convModel?.menuCjk || [])].join('；')}${rc.quota?.cjk ? '；額度條' : ''}${rc.viewCjk ? '；分類切換鈕' : ''}`));
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
@@ -448,7 +470,7 @@ function report(ms, mode) {
     '- 真的 Claude／Codex／Cursor 對話與委派（`--live` 只測 CLI 兩輪接續，委派需在畫面上試）',
     '- 安裝／登入按鈕開出的 PowerShell 視窗與瀏覽器授權流程',
     '- 貼上截圖、拖曳檔案、選檔對話框等實際滑鼠鍵盤操作',
-    '- 打包後的安裝版安裝流程（`npm run dist` 之後）',
+    '- 本機打包的 exe（`npm run dist` 之後）能啟動、能跑 Agent',
   ].join('\n');
   try { fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(REPORT_FILE, md + '\n'); } catch {}
   return lines.join('\n');

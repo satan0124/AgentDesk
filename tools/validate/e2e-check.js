@@ -38,6 +38,10 @@
     .map(s => [s.dataset.agent, (s.querySelector('.pill')?.className || 'none').replace('pill ', '')]));
   out.settingsCjk = [...document.querySelectorAll('#settingsModal label > span, #settingsModal h3, #settingsModal .btn')]
     .map(x => x.textContent).filter(t => CJK.test(t) && !/假|測試/.test(t)).slice(0, 5);
+  const claudeSel = document.querySelector('#agentSettings section[data-agent="claude"] select[data-k="model"]');
+  out.settingsModels = { claudeOptions: claudeSel ? claudeSel.querySelectorAll('option').length : 0,
+    presets: [...document.querySelectorAll('#customPreset option')].map(o => o.value),
+    builtinShown: ['codex', 'cursor'].filter(a => document.querySelector(`#agentSettings section[data-agent="${a}"]`)) };
   // 用 MutationObserver 等視窗關閉：視窗被遮住時 Chromium 會把計時器節流到約 1 秒一次，用 setTimeout 輪詢會量到假的 1000ms
   const modal = document.querySelector('#settingsModal');
   const t0 = Date.now();
@@ -79,6 +83,38 @@
   out.viewCjk = CJK.test(document.querySelector('#viewToggle').textContent);
   document.querySelector('#viewToggle [data-view="date"]').click();
   out.projectView = out.projectView && !document.querySelector('#convList .proj');
+  // 6c) 右欄卡片切換這個對話的模型與強度、額度條、只顯示目前對話
+  const baseModel = settings.agents.claude.model;
+  const mbtn = () => document.querySelector('#agentCards .model-btn[data-model="claude"]');
+  const mm = document.querySelector('#modelMenu');
+  mbtn().click();
+  await wait(100);
+  const mainCount = mm.querySelectorAll('button[data-m]').length;
+  mm.querySelector('button[data-more]').click();
+  const allCount = mm.querySelectorAll('button[data-m]').length;
+  const menuCjk = [...mm.querySelectorAll('.sec, button')].map(x => x.textContent).filter(x => CJK.test(x));
+  mm.querySelector('button[data-m="claude-sonnet-5-5"]').click();
+  await wait(300);
+  const c1 = await api.getConv(id);
+  mbtn().click(); await wait(100);
+  mm.querySelector('button[data-e="high"]').click();
+  await wait(300);
+  const c2 = await api.getConv(id);
+  const info = document.querySelector('#agentInfo').textContent;
+  mbtn().click(); await wait(100);
+  mm.querySelector('button[data-m=""]').click();
+  await wait(300);
+  const c3 = await api.getConv(id);
+  out.convModel = { mainCount, allCount, picked: c1.agentCfg?.claude?.model, effort: c2.agentCfg?.claude?.effort,
+    info: info.includes('Sonnet 5.5') && info.includes('high'), reset: !c3.agentCfg?.claude?.model && c3.agentCfg?.claude?.effort === 'high',
+    settingsKept: settings.agents.claude.model === baseModel && (await api.getSettings()).agents.claude.model === baseModel, menuCjk };
+  await api.updateConv(id, { agentCfg: { claude: null } });
+  agentStatus.limits = { claude: { windows: [{ kind: 'five_hour', used: 24, resetsAt: Date.now() / 1000 + 3600 }, { kind: 'seven_day', used: 90, resetsAt: Date.now() / 1000 + 86400 }] } };
+  renderAgentPanel();
+  const qrows = [...document.querySelectorAll('#agentCards .acard[data-agent="claude"] .qrow')];
+  out.quota = { rows: qrows.length, text: qrows.map(r => r.textContent).join(' | '), low: !!document.querySelector('#agentCards .qbar i.low'),
+    cjk: CJK.test(qrows.map(r => r.textContent + r.title).join('')) };
+  const finBefore = document.querySelectorAll('#recentJobs li:not(.empty)').length;
   // 6b) 新對話：輸入框上方的資料夾選單（有訊息的對話不顯示）
   const pick = document.querySelector('#cwdPick');
   const hiddenWithMsgs = pick.classList.contains('hidden');
@@ -94,6 +130,7 @@
   out.cwdPickCjk = [cm.querySelector('.sec').textContent, cm.querySelector('[data-act="browse"]').textContent].filter(x => CJK.test(x));
   document.body.click();
   out.cwdPick.closed = cm.classList.contains('hidden');
+  out.panelScoped = finBefore > 0 && !!document.querySelector('#recentJobs .empty') && !document.querySelector('#agentCards .job');
   // 7) 主視窗不能被導走
   const before = location.href;
   location.href = 'file:///C:/__agentdesk_validate__/x.png';
