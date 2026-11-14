@@ -12,7 +12,7 @@
   },
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis portable --publish never"
+    "dist": "electron-builder --win portable --publish never"
   },
   "dependencies": {
     "marked": "15.0.12"
@@ -38,16 +38,7 @@
     "asarUnpack": ["src/spawner.js"],
     "win": {
       "icon": "build/icon.ico",
-      "target": ["nsis", "portable"]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "AgentDesk",
-      "artifactName": "AgentDesk-Setup-${version}.${ext}"
+      "target": ["portable"]
     },
     "portable": {
       "artifactName": "AgentDesk-${version}-portable.${ext}"
