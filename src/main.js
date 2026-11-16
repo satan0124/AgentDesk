@@ -11,7 +11,7 @@ const { buildContext, delegateReply } = require('./context');
 const { MODES, modeOf, modeNotes, delegateTail, frugalNote, frugalPlace, needWork, stickyReadOnly, mustRestart } = require('./mode');
 const { DIR: WORK_DIR, makeWork, workPath, template, parseWork, workFromFile } = require('./work');
 const { transcript, entry } = require('./transcript');
-const { KEEP, compressPrompt, parseState, resumeForIndex, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext } = require('./compress');
+const { KEEP, compressPrompt, parseState, resumeForIndex, chunkRanges, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext } = require('./compress');
 const i18n = require('./shared/i18n');
 const tr = i18n.t;
 const { applyEvent, partsText } = require('./shared/reduce');
@@ -176,13 +176,14 @@ function buildPrompt(conv, agent, text, history) {
     const head = indexContext({ lines: idx.lines, file: transcriptFile(conv.id), index: indexFile(conv.id), level, tr,
       state: !work && conv.state?.at <= idx.upto ? conv.state : null });
     const body = ctx.text ? `${head}\n${tr('最近的原文：')}\n${ctx.text}` : head;
-    return { prompt: `${body}\n${tr('[以上]')}\n\n${text}`, chars: body.length };
+    return { prompt: `${body}\n${tr('[以上]')}\n\n${text}`, chars: body.length, seen: ctx.from + 1 };
   }
+  // seen：沒有 session 時，這個新 session 從第幾則（1 起）之後的原文都看過了（見 compress 的接續判斷）
   const ctx = buildContext(opts);
-  if (!ctx.text) return { prompt: text, chars: 0 };
+  if (!ctx.text) return { prompt: text, chars: 0, seen: ctx.from + 1 };
   const head = tr(hasSession ? '[你上次回覆之後，使用者在同一個對話裡和其他 Agent 的往來，供參考]'
     : '[這個對話先前的內容，供參考]');
-  return { prompt: `${head}\n${ctx.text}\n${tr('[以上]')}\n\n${text}`, chars: ctx.chars };
+  return { prompt: `${head}\n${ctx.text}\n${tr('[以上]')}\n\n${text}`, chars: ctx.chars, seen: ctx.from + 1 };
 }
 
 const labelOf = agent => labelOfCfg(agent, settings.agents[agent]);
@@ -217,6 +218,7 @@ function notesFor(conv, agent, role = 'main') {
 function dropSession(conv, agent) {
   delete conv.sessions[agent];
   if (conv.sizes) delete conv.sizes[agent];
+  if (conv.seen) delete conv.seen[agent];
   if (conv.ruled) delete conv.ruled[agent];
 }
 // 切到工作模式後接不回去的 session（Cursor，見 mode.js 的 mustRestart）：丟掉重開。
@@ -404,7 +406,8 @@ async function startTurn(convId, agent, text, attachments = []) {
   ensureWorkFile(conv);
   const job = startJob(agent, conv, 'main', text || tr('（附件）'));
   ctx.job = job;
-  const { prompt, chars: ctxChars } = buildPrompt(conv, agent, (text || tr('請看附件。')) + attachText(atts), history);
+  const freshSession = !conv.sessions[agent];
+  const { prompt, chars: ctxChars, seen } = buildPrompt(conv, agent, (text || tr('請看附件。')) + attachText(atts), history);
   if (ctxChars) emitTo(conv, msg, { type: 'context', chars: ctxChars });
   const notes = notesFor(conv, agent);
   if (agent === 'claude') try { fs.mkdirSync(trDir(convId), { recursive: true }); } catch {}
@@ -437,6 +440,8 @@ async function startTurn(convId, agent, text, attachments = []) {
   // session 失效（例如 CLI 端被刪）：清掉，下一次重開並帶上下文
   if (r.error && /session|thread|chat/i.test(r.error) && /not found|no conversation|找不到|invalid/i.test(r.error)) dropSession(conv, agent);
   else noteSize(conv, agent, r, !!opts.sessionId);
+  // 新開的 session：記下它從第幾則之後的原文都看過（之後壓縮時判斷接續原本的 session 划不划算）
+  if (freshSession && conv.sessions[agent]) conv.seen = { ...(conv.seen || {}), [agent]: seen };
   sendMeta(conv);
   if (r.text && !msg.parts.some(p => p.kind === 'text')) emitTo(conv, msg, { type: 'text', text: r.text });
   // 對話模式：Agent 想改檔卻做不了（Claude 的拒絕記錄，或回覆裡約定的標記）→ 畫面出現「切到工作模式並繼續」
@@ -506,12 +511,15 @@ function compressPlan(conv, agent) {
   const from = (had?.upto || 0) + 1, to = conv.messages.length;
   const segs = conv.messages.slice(from - 1, to).map((m, i) => entry(m, from + i, { label: labelOf, tr }));
   const segText = (a, b) => segs.slice(a - from, b - from + 1).join('\n\n');
-  const chars = segs.reduce((s, x) => s + x.length, 0);
-  const resume = !!conv.sessions[agent] && resumeForIndex({ tokens: conv.sizes?.[agent]?.tokens, chars });
-  return { had, from, to, segText, resume };
+  const chars = segs.reduce((s, x) => s + x.length + 2, 0);
+  const resume = !!conv.sessions[agent] && resumeForIndex({ tokens: conv.sizes?.[agent]?.tokens, chars, seen: conv.seen?.[agent], from });
+  // 開乾淨的 session 時，段落原文直接放進 prompt；太長就分批，每批各開一個
+  const parts = resume ? [[from, to]] : chunkRanges(segs.map(x => x.length + 2), from);
+  return { had, from, to, segText, resume, parts };
 }
-// 請 agent 替「還沒進索引的段落」寫索引（給它的話與格式見 compress.js）。session 不大就在原本的 session 裡寫：
-// 內容它都看過，不用重讀；session 很大或沒有 session 就開乾淨的 session，讓它讀逐字稿來寫。
+// 請 agent 替「還沒進索引的段落」寫索引（給它的話與格式見 compress.js）。
+// 它原本的 session 看過全部要寫的段落、又不比重讀便宜太多時，接續原本的 session（一個請求就寫完）；
+// 否則開乾淨的 session，把段落原文直接放進 prompt（不用它分段讀檔，每讀一段就重送一次前面的內容），太長分批。
 // 寫回來的索引由 AgentDesk 核對（逐字稿裡沒出現的檔案拿掉、漏掉的段落補佔位）並補上改過的檔，
 // 再追加到索引檔、清掉各 Agent 的 session，之後每一輪改附「索引＋最近幾則原文」。
 // 這一輪不進對話記錄；失敗或被停止時什麼都不變
@@ -521,40 +529,52 @@ async function compress(convId, agent) {
   if (running.has(convId)) return { error: tr('這個對話還在執行中') };
   if (!fs.existsSync(conv.cwd)) return { error: tr('工作資料夾不存在：{cwd}', { cwd: conv.cwd }) };
   if (!settings.agents[agent]?.enabled) return { error: tr('{name} 還沒加入，請到設定加入', { name: labelOf(agent) }) };
-  const { had, from, to, segText, resume } = compressPlan(conv, agent);
+  const { had, from, to, segText, resume, parts } = compressPlan(conv, agent);
   if (to < from) return { error: tr('沒有還沒寫進索引的內容') };
   writeTranscript(conv);
   if (!fs.existsSync(transcriptFile(convId))) return { error: tr('逐字稿寫不進去：{file}', { file: transcriptFile(convId) }) };
-  const ctx = { conv, stops: new Set(), compress: { agent, from, to } };
+  const ctx = { conv, stops: new Set(), compress: { agent, from, to, part: 1, parts: parts.length } };
   running.set(convId, ctx);
   send('conv:changed', listConvs());
   const job = startJob(agent, conv, 'compress', tr('替 #{from}–#{to} 寫索引', { from, to }));
   // 只寫索引：不管對話是哪種模式都用唯讀的方式跑；這一輪產生的 session 不留
-  // 沒有進程檔的對話另外要「現況／下一步」（有進程檔的，狀態寫在進程檔裡）
+  // 沒有進程檔的對話另外要「現況／下一步」（有進程檔的，狀態寫在進程檔裡）：只在最後一批要，它看得到最近的內容
   const wantState = !workOf(conv);
-  const run = runAgent(agent, { ...cfgFor(conv, agent), readOnly: true }, { prompt: compressPrompt({ file: transcriptFile(convId), from, to, tr, state: wantState }),
-    cwd: conv.cwd, sessionId: resume ? conv.sessions[agent] : undefined, addDirs: [trDir(convId)],
-    onEvent: ev => {
-      if (ev.type === 'session') return;
-      if (ev.type === 'limits') return setLimits(agent, ev);
-      trackEvent(job, ev);
-    } });
-  ctx.stops.add(run.stop);
-  const r = await run.promise;
-  // 這一輪是唯讀跑的。接續的 session 沒壓成時會留著：記下它跑過唯讀，之後在工作模式才會重開（Cursor，見 mode.js 的 mustRestart）。
-  // 沒接續就沒動到原本的 session
-  if (resume && stickyReadOnly(agent)) conv.told = { ...(conv.told || {}), [agent]: 'chat' };
-  // session 失效：清掉，再按一次就會不靠 session、改讀逐字稿來寫
-  if (resume && r.error && /session|thread|chat/i.test(r.error) && /not found|no conversation|找不到|invalid/i.test(r.error)) dropSession(conv, agent);
-  const parsed = r.error ? [] : parseIndex(`${r.text || ''}\n${r.final || ''}`, { from, to }).filter((e, i, all) => all.findIndex(x => indexLine(x) === indexLine(e)) === i);
-  const checked = verifyIndex(parsed, { from, to, segText, edited: (a, b) => editedFiles(conv.messages.slice(a - 1, b), conv.cwd), tr });
+  const parsed = [];
+  let error = '', r = {};
+  for (let k = 0; k < parts.length && !error; k++) {
+    const [a, b] = parts[k];
+    ctx.compress = { ...ctx.compress, part: k + 1 };
+    if (k) send('conv:changed', listConvs());
+    const last = k === parts.length - 1;
+    const prompt = compressPrompt({ file: transcriptFile(convId), from: a, to: b, tr, state: wantState && last, text: resume ? '' : segText(a, b) });
+    const run = runAgent(agent, { ...cfgFor(conv, agent), readOnly: true }, { prompt,
+      cwd: conv.cwd, sessionId: resume ? conv.sessions[agent] : undefined, addDirs: [trDir(convId)],
+      onEvent: ev => {
+        if (ev.type === 'session') return;
+        if (ev.type === 'limits') return setLimits(agent, ev);
+        trackEvent(job, ev);
+      } });
+    ctx.stops.add(run.stop);
+    r = await run.promise;
+    ctx.stops.delete(run.stop);
+    // 這一輪是唯讀跑的。接續的 session 沒壓成時會留著：記下它跑過唯讀，之後在工作模式才會重開（Cursor，見 mode.js 的 mustRestart）。
+    // 沒接續就沒動到原本的 session
+    if (resume && stickyReadOnly(agent)) conv.told = { ...(conv.told || {}), [agent]: 'chat' };
+    // session 失效：清掉，再按一次就會開乾淨的 session 來寫
+    if (resume && r.error && /session|thread|chat/i.test(r.error) && /not found|no conversation|找不到|invalid/i.test(r.error)) dropSession(conv, agent);
+    const got = r.error ? [] : parseIndex(`${r.text || ''}\n${r.final || ''}`, { from: a, to: b });
+    error = r.error || (got.length ? '' : tr('{name} 沒有照格式寫出索引，這次沒有壓縮。可以再試一次，或換一個 Agent。', { name: labelOf(agent) }));
+    parsed.push(...got);
+  }
+  const uniq = parsed.filter((e, i, all) => all.findIndex(x => indexLine(x) === indexLine(e)) === i);
+  const checked = verifyIndex(uniq, { from, to, segText, edited: (a, b) => editedFiles(conv.messages.slice(a - 1, b), conv.cwd), tr });
   const entries = checked.entries;
-  let error = r.error || (parsed.length ? '' : tr('{name} 沒有照格式寫出索引，這次沒有壓縮。可以再試一次，或換一個 Agent。', { name: labelOf(agent) }));
   if (!error) {
     try {
       if (!had) fs.writeFileSync(indexFile(convId), indexHead(conv.title, tr));
       fs.appendFileSync(indexFile(convId), entries.map(indexLine).join('\n') + '\n');
-      conv.indexed = to; conv.sessions = {}; conv.sizes = {};
+      conv.indexed = to; conv.sessions = {}; conv.sizes = {}; conv.seen = {};
       // 現況／下一步每次整個換掉（不追加）；這次沒寫出來就留著上一次的，附上時會註明是到 #幾的狀態
       const st = wantState ? parseState(`${r.text || ''}\n${r.final || ''}`) : null;
       if (st) conv.state = { ...st, at: to };
@@ -565,7 +585,7 @@ async function compress(convId, agent) {
   if (convs.get(convId) === conv) saveConv(conv, false);   // 壓縮途中對話被刪掉就不要再存回去
   sendMeta(conv);
   send('conv:changed', listConvs());
-  return error ? { error } : { from, to, added: entries.length, resumed: resume, dropped: checked.dropped, gaps: checked.gaps, overlaps: checked.overlaps };
+  return error ? { error } : { from, to, added: entries.length, resumed: resume, parts: parts.length, dropped: checked.dropped, gaps: checked.gaps, overlaps: checked.overlaps };
 }
 
 function startServer() {
@@ -613,7 +633,7 @@ ipcMain.handle('conv:update', (_, id, patch) => {
     publishJobs();
   }
   if (typeof patch.cwd === 'string') c.cwd = patch.cwd;
-  if (patch.resetSessions) { c.sessions = {}; c.sizes = {}; }
+  if (patch.resetSessions) { c.sessions = {}; c.sizes = {}; c.seen = {}; }
   // 只讓一個 Agent 重開（右欄卡片的「重開」）；回合執行中不動，免得跑完又把舊的 session 寫回來
   if (typeof patch.resetSession === 'string' && !running.has(id)) dropSession(c, patch.resetSession);
   // 模式與工作名跟著整個回合走：執行中不換（委派出去的 Agent 才不會和 Claude 用不同的權限）

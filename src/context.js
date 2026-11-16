@@ -35,7 +35,8 @@ function buildContext({ history, agent, hasSession, msgText, line, tr = fill, le
     const t = msgText(m);
     if (t) items.push({ i, m, t });
   }
-  if (!items.length) return { text: '', chars: 0, omitted: 0 };
+  // from：從 history 的第幾則（0 起）開始之後的原文全部附上了（壓縮時判斷新開的 session 看過哪些段落用）
+  if (!items.length) return { text: '', chars: 0, omitted: 0, from: history.length };
   const total = items.length;
   if (recent > 0 && items.length > recent) items = items.slice(-recent);
   // 從最新往回放，放到上限為止
@@ -59,7 +60,7 @@ function buildContext({ history, agent, hasSession, msgText, line, tr = fill, le
   if (omitted) parts.push(tr('（中間較早的 {n} 則往來已省略）', { n: omitted }));
   parts.push(...picked.map(p => p.s));
   const body = parts.join('\n\n');
-  return { text: body, chars: body.length, omitted };
+  return { text: body, chars: body.length, omitted, from: picked[0].i };
 }
 
 // 委派結果交回 Claude：有最終回覆就用最終回覆，太長就截。

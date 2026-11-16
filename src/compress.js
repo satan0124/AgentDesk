@@ -8,7 +8,8 @@ const { budgetOf } = require('./context');
 const SEP = '｜';
 const KEEP = 4;          // 索引涵蓋的段落裡，最後幾則仍然附原文：剛壓縮完的那一輪才接得上話
 const FIELD_MAX = 300;   // 索引一欄最長幾個字（Agent 寫太長時截短，細節本來就該留在逐字稿）
-const RESUME_MAX = 100000;   // session 到這個大小（tokens）以上，寫索引改開乾淨的 session 讀逐字稿（見 resumeForIndex）
+const FRESH_BASE = 40000;   // 開乾淨的 session 時，一個請求的基本盤（系統提示、工具說明；實測 Claude 約 4.7 萬、Codex 約 2 萬）
+const CHUNK_MAX = 100000;   // 段落原文直接放進 prompt 時，一批最多幾個字（超過就分批，每批各開一個 session）
 const FILES_MAX = 5;     // 一筆索引由 AgentDesk 補的「改過的檔」最多列幾個
 // 沒傳翻譯函式時（單元測試）照樣代入 {name} 這類佔位
 const same = (s, v) => s.replace(/\{(\w+)\}/g, (m, k) => (v && v[k] !== undefined ? v[k] : m));
@@ -16,11 +17,13 @@ const oneLine = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); ret
 
 // 請 Agent 寫索引的 prompt。第一行的「#起–#迄」是這次要寫的範圍。
 // state：沒有進程檔的對話另外要「現況／下一步」兩行（有進程檔的由進程檔的續傳指引負責）
-function compressPrompt({ file, from, to, tr = same, state = false }) {
+// text：那幾段的逐字稿原文（開乾淨的 session 時直接附上，不用它讀檔）；空的就請它自己看逐字稿（接續原本的 session 時）
+function compressPrompt({ file, from, to, tr = same, state = false, text = '' }) {
   return [
     tr('[AgentDesk 壓縮 #{from}–#{to}]', { from, to }),
     tr('這個對話要壓縮。請替逐字稿第 #{from} 到 #{to} 段寫索引。這一輪只寫索引：不要修改任何檔案，也不要做別的事。', { from, to }),
-    tr('逐字稿：{file}（每則訊息一段，標題是「## #編號 誰 · 時間」）。沒看過或記不清楚的段落，先讀逐字稿再寫。', { file }),
+    text ? tr('第 #{from} 到 #{to} 段的逐字稿原文附在最後（每則訊息一段，標題是「## #編號 誰 · 時間」），照這些內容寫，不用再讀檔。完整逐字稿在 {file}。', { from, to, file })
+      : tr('逐字稿：{file}（每則訊息一段，標題是「## #編號 誰 · 時間」）。沒看過或記不清楚的段落，先讀逐字稿再寫。', { file }),
     tr('格式：每行一筆，四欄用全形的「｜」分開。只輸出索引行，不要表格、標題或其他說明。'),
     tr('#起–#迄｜主題｜結論｜相關檔案'),
     tr('- 連續談同一件事的段落合成一筆，換了話題就另起一筆。編號要涵蓋 #{from} 到 #{to}，不跳號、不重疊。', { from, to }),
@@ -33,7 +36,21 @@ function compressPrompt({ file, from, to, tr = same, state = false }) {
       tr('現況：做到哪裡、定了什麼（一行）'),
       tr('下一步：接下來要做或還沒解決的事，沒有就寫「-」（一行）'),
     ] : []),
+    ...(text ? ['', tr('[逐字稿 #{from}–#{to} 原文開始]', { from, to }), String(text).trim(), tr('[逐字稿原文結束。照前面的格式輸出。]')] : []),
   ].join('\n');
+}
+
+// 段落太多時切成幾批：lengths 是第 from 段起每一段的字數，每批加起來不超過 max（單一段超過就自己一批）。回傳 [[起, 迄], …]
+function chunkRanges(lengths, from, max = CHUNK_MAX) {
+  const out = [];
+  let a = from, sum = 0;
+  lengths.forEach((n, i) => {
+    const k = from + i;
+    if (sum && sum + n > max) { out.push([a, k - 1]); a = k; sum = 0; }
+    sum += n;
+  });
+  if (lengths.length) out.push([a, from + lengths.length - 1]);
+  return out;
 }
 
 // 從寫索引的回覆裡挑出「現況／下一步」兩行（三種語言的開頭都收，前面的條列符號與粗體略過）。兩行都沒有就是 null
@@ -50,14 +67,16 @@ function parseState(text) {
   return now || next ? { now: now || '-', next: next || '-' } : null;
 }
 
-// 寫索引要不要接續原本的 session。tokens：這個 Agent 的 session 大小（conv.sizes，不知道就是空的）；
-// chars：這次要寫索引的段落在逐字稿裡的字數。
-// 小 session 接續比較便宜（只要一個請求，工具輸出它也記得）；乾淨的 session 至少要讀檔、寫索引幾個請求，每個都有幾萬 tokens 的基本盤。
-// session 很大時一個請求就比讀逐字稿的整條路貴，而且上下文太滿時摘要品質會掉，所以改開乾淨的 session。
-// 要寫的段落粗估（兩個字算一個 token）比 session 還大時，讀逐字稿也省不了，照樣接續
-function resumeForIndex({ tokens, chars } = {}) {
-  if (!tokens || tokens < RESUME_MAX) return true;
-  return !!chars && chars / 2 >= tokens;
+// 寫索引要不要接續原本的 session。
+//   seen：這個 session 從第幾則（1 起）之後的原文都看過（main.js 在 session 開的時候記）；from：這次從第幾段寫起
+//   tokens：session 大小（conv.sizes，不知道就是空的）；chars：要寫的段落在逐字稿裡的字數
+// 接續只有在 session 看過全部要寫的段落時才便宜：一個請求就寫完。沒看過的話它得回頭讀逐字稿，
+// 每讀一段就把整個大 session 重送一次（實測 30.7 萬的 session 跑了 22 個請求、550 萬 tokens）。
+// 看過的話再比成本：接續是一個 session 大小的請求；開乾淨的是基本盤加上段落原文（兩個字粗估一個 token）
+function resumeForIndex({ tokens, chars = 0, seen, from } = {}) {
+  if (!seen || !from || seen > from) return false;
+  if (!tokens) return true;
+  return tokens <= FRESH_BASE + chars / 2;
 }
 
 // ---------- 索引寫完後由 AgentDesk 補與核對 ----------
@@ -74,7 +93,8 @@ function toolPaths(name, detail) {
   if (name === 'edit' && /,\s/.test(d)) return d.split(/,\s+/).map(s => s.replace(/^(add|update|delete|remove|create|modify|rename)\s+/i, '').trim()).filter(Boolean);
   return [d.replace(/^(add|update|delete|remove|create|modify|rename)\s+(?=[A-Za-z]:[\\/]|[\\/.])/i, '')];
 }
-// 一段訊息裡改過的檔（工具失敗的不算；委派卡片裡對方改的也算）。在工作資料夾裡的轉成相對路徑，去重、照出現順序
+// 一段訊息裡改過的檔（工具失敗的不算；委派卡片裡對方改的也算）。只留工作資料夾裡的，轉成相對路徑，去重、照出現順序。
+// 工作資料夾外面的（例如專案搬家前的舊路徑、Agent 自己的設定檔）不收：索引只是指標，列太多反而難找
 function editedFiles(messages, cwd) {
   const out = [], seen = new Set();
   const root = cwd ? path.resolve(cwd) : '';
@@ -82,7 +102,8 @@ function editedFiles(messages, cwd) {
     let r = p;
     if (root && path.isAbsolute(p)) {
       const rel = path.relative(root, path.resolve(p));
-      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) r = rel;
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return;
+      r = rel;
     }
     r = slash(r);
     const k = r.toLowerCase();
@@ -205,4 +226,4 @@ function indexContext({ lines, file, index, level, tr = same, state }) {
   ].join('\n');
 }
 
-module.exports = { KEEP, RESUME_MAX, compressPrompt, parseState, resumeForIndex, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext };
+module.exports = { KEEP, FRESH_BASE, CHUNK_MAX, compressPrompt, chunkRanges, parseState, resumeForIndex, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext };

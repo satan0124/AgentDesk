@@ -493,11 +493,13 @@ function renderCompress() {
   const done2 = !st && lastCompress && lastCompress.id === current?.id && lastCompress.at === current?.messages.length ? lastCompress.text : '';
   $('#compressNote').classList.toggle('hidden', !st && !done2);
   $('#compressNote .spinner').classList.toggle('hidden', !st);
-  if (st) $('#compressNote .t').textContent = t('壓縮中：{name} 正在替 #{from}–#{to} 寫索引…', { name: LABEL[st.agent] || st.agent, from: st.from, to: st.to });
+  if (st) $('#compressNote .t').textContent = t('壓縮中：{name} 正在替 #{from}–#{to} 寫索引…', { name: LABEL[st.agent] || st.agent, from: st.from, to: st.to })
+    + (st.parts > 1 ? t('（第 {n}／{total} 批）', { n: st.part, total: st.parts }) : '');
   else if (done2) $('#compressNote .t').textContent = done2;
 }
 function compressSummary(r) {
   const out = [t('已壓縮 #{from}–#{to}，寫了 {n} 筆索引', { from: r.from, to: r.to, n: r.added })];
+  if (r.parts > 1) out.push(t('分 {n} 批寫', { n: r.parts }));
   if (r.dropped) out.push(t('拿掉 {n} 個逐字稿裡沒出現的檔案', { n: r.dropped }));
   if (r.gaps?.length) out.push(t('{list} 沒有索引，補了佔位', { list: r.gaps.map(([a, b]) => a === b ? `#${a}` : `#${a}–#${b}`).join(t('、')) }));
   if (r.overlaps) out.push(t('{n} 筆的範圍和前一筆重疊', { n: r.overlaps }));
@@ -509,7 +511,7 @@ async function compressWith(a) {
   const id = current.id, from = Math.min(current.indexed || 0, current.messages.length) + 1, to = current.messages.length;
   if (to < from) return;
   const info = await api.compressInfo(id, a).catch(() => null);
-  const how = info && !info.resume ? '\n' + t('{name} 會開新的 session、讀逐字稿來寫，不接續原本的 session（沒有 session，或 session 太大時這樣比較省）。', { name: LABEL[a] }) : '';
+  const how = info && !info.resume ? '\n' + t('{name} 會開新的 session 來寫，AgentDesk 直接把要寫的段落交給它，不接續原本的 session（原本的 session 沒看過全部的段落，或接續比重新讀還貴）。', { name: LABEL[a] }) : '';
   if (!await confirmBox(t('請 {name} 替第 #{from} 到 #{to} 段寫索引？\n寫完後各 Agent 的 session 會清掉，之後每一輪只附索引與最近幾則原文；完整原文留在逐字稿。\n寫索引會花 {name} 一輪的額度。', { name: LABEL[a], from, to }) + how)) return;
   const r = await api.compress(id, a).catch(err => ({ error: String(err.message || err) }));
   if (!r?.error) lastCompress = { id, at: to, text: compressSummary(r) };

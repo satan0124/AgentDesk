@@ -543,10 +543,25 @@ async function unitTests() {
   });
 
   await check('壓縮：大 session 改讀逐字稿、改過的檔由動作記錄補、索引核對（檔案、跳號、重疊）', () => {
-    const { RESUME_MAX, compressPrompt, resumeForIndex, editedFiles, verifyIndex, indexLine } = require(path.join(SRC, 'compress.js'));
-    // #9 接續與否：不知道大小、不到 10 萬接續；10 萬以上不接續；要寫的段落粗估比 session 還大時照樣接續
-    assert(RESUME_MAX === 100000 && resumeForIndex() && resumeForIndex({}) && resumeForIndex({ tokens: 40107 }) && resumeForIndex({ tokens: RESUME_MAX - 1 })
-      && !resumeForIndex({ tokens: RESUME_MAX }) && !resumeForIndex({ tokens: 653000, chars: 50000 }) && resumeForIndex({ tokens: 120000, chars: 300000 }), 'resumeForIndex 的規則不對');
+    const { FRESH_BASE, CHUNK_MAX, compressPrompt, chunkRanges, resumeForIndex, editedFiles, verifyIndex, indexLine, parseIndex } = require(path.join(SRC, 'compress.js'));
+    // #9 接續與否：session 沒看過全部要寫的段落（seen 不知道、或比 from 晚）一律不接續；
+    // 看過的話，大小不知道就接續，否則比「一個 session 大小的請求」和「基本盤＋段落原文」哪個便宜
+    assert(FRESH_BASE === 40000 && !resumeForIndex() && !resumeForIndex({ tokens: 30000, from: 5 }) && !resumeForIndex({ tokens: 30000, seen: 6, from: 5 })
+      && resumeForIndex({ seen: 1, from: 5 }) && resumeForIndex({ tokens: 30000, seen: 5, from: 5 })
+      && !resumeForIndex({ tokens: 133000, chars: 20000, seen: 1, from: 137 }) && resumeForIndex({ tokens: 150000, chars: 250000, seen: 1, from: 1 }), 'resumeForIndex 的規則不對');
+    // 新開的 session 看過哪些：buildContext 回傳從第幾則起的原文全部附上了（擠掉的不算看過）
+    const { buildContext } = require(path.join(SRC, 'context.js'));
+    const bcBase = { agent: 'codex', hasSession: false, msgText: m => m.text, line: (m, t) => t };
+    const hist = n => Array.from({ length: 6 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', agent: 'claude', text: 'x'.repeat(n) }));
+    const bSmall = buildContext({ ...bcBase, history: hist(10), level: 'lean' }), bBig = buildContext({ ...bcBase, history: hist(5000), level: 'lean' });
+    assert(bSmall.from === 0 && bBig.omitted > 0 && bBig.from > 1 && buildContext({ ...bcBase, history: [], level: 'lean' }).from === 0, JSON.stringify({ s: bSmall.from, b: bBig.from, o: bBig.omitted }));
+    // 分批：每批不超過上限，單一段超過就自己一批，不跳號
+    assert(JSON.stringify(chunkRanges([40, 40, 40, 200, 10], 7, 100)) === '[[7,8],[9,9],[10,10],[11,11]]' && JSON.stringify(chunkRanges([5, 5], 1)) === '[[1,2]]'
+      && chunkRanges([], 3).length === 0 && CHUNK_MAX === 100000, JSON.stringify(chunkRanges([40, 40, 40, 200, 10], 7, 100)));
+    // 開乾淨的 session：段落原文附在最後，不請它讀檔；原文裡像索引的行不會被當成給 Agent 的範例
+    const pin = compressPrompt({ file: 'T.md', from: 3, to: 4, text: '## #3 使用者 → Claude\n\nhello\n\n## #4 Claude\n\nworld' });
+    assert(pin.includes('附在最後') && !pin.includes('先讀逐字稿再寫') && pin.includes('[逐字稿 #3–#4 原文開始]\n## #3 使用者') && pin.endsWith('world\n[逐字稿原文結束。照前面的格式輸出。]')
+      && compressPrompt({ file: 'T.md', from: 3, to: 4 }).includes('先讀逐字稿再寫') && parseIndex(pin, { from: 1, to: 9 }).length === 0, pin.slice(-160));
     // #11 改過的檔：Claude 的 Edit/Write/NotebookEdit、委派裡 Codex 的 edit（一次多個）、Cursor 的 edit；讀檔、指令、失敗的不算；
     // 工作資料夾裡的轉相對路徑、去重、照出現順序；資料夾外的留絕對路徑
     const cwd = process.platform === 'win32' ? 'E:\\proj' : '/proj';
@@ -561,8 +576,10 @@ async function unitTests() {
     ];
     const ed = editedFiles(msgs, cwd);
     assert(JSON.stringify(ed) === JSON.stringify(['src/a.js', 'nb.ipynb', 'src/b.cs', 'src/c.cs', 'src/d.ts']), JSON.stringify(ed));
+    // 工作資料夾外面的不收（專案搬家前的舊路徑、Agent 自己的設定檔）
     const out = path.resolve(cwd, '..', 'other', 'x.txt');
-    assert(editedFiles([{ role: 'assistant', parts: [{ kind: 'tool', name: 'Write', detail: out }] }], cwd)[0] === out.replace(/\\/g, '/') && editedFiles([], cwd).length === 0, '工作資料夾外的檔');
+    assert(editedFiles([{ role: 'assistant', parts: [{ kind: 'tool', name: 'Write', detail: out }, { kind: 'tool', name: 'Write', detail: P('in.txt') }] }], cwd).join() === 'in.txt'
+      && editedFiles([], cwd).length === 0, '工作資料夾外的檔');
     // 給 Agent 的話：相關檔案只寫沒改的
     assert(compressPrompt({ file: 'T.md', from: 1, to: 2 }).includes('改過的檔案 AgentDesk 會從動作記錄補上'), '寫索引的話沒提到改過的檔由 AgentDesk 補');
     // #10 核對：檔名沒出現在那幾段的拿掉（a.js 不能對到 data.js）、改過的檔排前面且不重複、漏掉的段落補佔位、重疊只計數、照起點排序

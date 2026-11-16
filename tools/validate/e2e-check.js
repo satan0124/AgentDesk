@@ -358,7 +358,7 @@
   // xagy 的 session 大小不知道 → 接續原本的 session 寫索引；xcc「size turn」那一則用 Edit 改過 src/edited.js（索引要由動作記錄補上）
   out.compress.resumeInfo = (await api.compressInfo(mid, 'xagy'))?.resume === true;
   out.compress.ccAt = kc0.messages.findIndex(m => m.role === 'assistant' && m.agent === 'xcc') + 1;
-  const freshLine = name => t('{name} 會開新的 session、讀逐字稿來寫，不接續原本的 session（沒有 session，或 session 太大時這樣比較省）。', { name });
+  const freshLine = name => t('{name} 會開新的 session 來寫，AgentDesk 直接把要寫的段落交給它，不接續原本的 session（原本的 session 沒看過全部的段落，或接續比重新讀還貴）。', { name });
   // 「壓縮中」的畫面狀態（直接設狀態來看，不靠時間差）：輸入框上方有一行、送出鈕變停止、不能換模式也不能再按壓縮
   const krow = convList.find(c => c.id === mid), knote = document.querySelector('#compressNote');
   krow.compressing = { agent: 'xagy', from: 1, to: 2 }; updateComposer();

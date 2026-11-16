@@ -80,8 +80,14 @@
     '最近': 'Recent',
     '開啟資料夾…': 'Open folder…',
     // ---- 壓縮：開乾淨的 session 寫索引、索引的核對與補檔（compress.js、頂列） ----
-    '{name} 會開新的 session、讀逐字稿來寫，不接續原本的 session（沒有 session，或 session 太大時這樣比較省）。':
-      '{name} will start a new session and read the transcript, instead of resuming its session (cheaper when there is no session or it is very large).',
+    '{name} 會開新的 session 來寫，AgentDesk 直接把要寫的段落交給它，不接續原本的 session（原本的 session 沒看過全部的段落，或接續比重新讀還貴）。':
+      '{name} will write it in a new session, with AgentDesk handing it the sections directly, instead of resuming its session (that session has not seen all the sections, or resuming would cost more than rereading).',
+    '第 #{from} 到 #{to} 段的逐字稿原文附在最後（每則訊息一段，標題是「## #編號 誰 · 時間」），照這些內容寫，不用再讀檔。完整逐字稿在 {file}。':
+      'The transcript of sections #{from} to #{to} is attached at the end (one section per message, headed "## #number who · time"). Write from it; there is no need to read the file. The full transcript is at {file}.',
+    '[逐字稿 #{from}–#{to} 原文開始]': '[Transcript #{from}–#{to} begins]',
+    '[逐字稿原文結束。照前面的格式輸出。]': '[Transcript ends. Reply in the format given above.]',
+    '（第 {n}／{total} 批）': ' (part {n} of {total})',
+    '分 {n} 批寫': 'written in {n} parts',
     '已壓縮 #{from}–#{to}，寫了 {n} 筆索引': 'Compressed #{from}–#{to} into {n} index entries',
     '拿掉 {n} 個逐字稿裡沒出現的檔案': 'removed {n} files not found in the transcript',
     '{list} 沒有索引，補了佔位': '{list} had no index entry; added placeholders',
@@ -544,8 +550,14 @@
     "選擇這個對話的工作資料夾": "选择这个对话的工作文件夹",
     "最近": "最近",
     "開啟資料夾…": "打开文件夹…",
-    "{name} 會開新的 session、讀逐字稿來寫，不接續原本的 session（沒有 session，或 session 太大時這樣比較省）。":
-      "{name} 会开新的 session、读逐字稿来写，不接续原本的 session（没有 session，或 session 太大时这样比较省）。",
+    "{name} 會開新的 session 來寫，AgentDesk 直接把要寫的段落交給它，不接續原本的 session（原本的 session 沒看過全部的段落，或接續比重新讀還貴）。":
+      "{name} 会开新的 session 来写，AgentDesk 直接把要写的段落交给它，不接续原本的 session（原本的 session 没看过全部的段落，或接续比重新读还贵）。",
+    "第 #{from} 到 #{to} 段的逐字稿原文附在最後（每則訊息一段，標題是「## #編號 誰 · 時間」），照這些內容寫，不用再讀檔。完整逐字稿在 {file}。":
+      "第 #{from} 到 #{to} 段的逐字稿原文附在最后（每条消息一段，标题是“## #编号 谁 · 时间”），按这些内容写，不用再读文件。完整逐字稿在 {file}。",
+    "[逐字稿 #{from}–#{to} 原文開始]": "[逐字稿 #{from}–#{to} 原文开始]",
+    "[逐字稿原文結束。照前面的格式輸出。]": "[逐字稿原文结束。按前面的格式输出。]",
+    "（第 {n}／{total} 批）": "（第 {n}／{total} 批）",
+    "分 {n} 批寫": "分 {n} 批写",
     "已壓縮 #{from}–#{to}，寫了 {n} 筆索引": "已压缩 #{from}–#{to}，写了 {n} 条索引",
     "拿掉 {n} 個逐字稿裡沒出現的檔案": "去掉 {n} 个逐字稿里没出现的文件",
     "{list} 沒有索引，補了佔位": "{list} 没有索引，补了占位",
