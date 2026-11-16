@@ -34,7 +34,7 @@ git clone https://github.com/satan0124/AgentDesk.git
 
 第一次開啟時，如果找不到 Claude Code 或還沒登入，會直接帶到設定頁，按「安裝」「登入」即可。替對話選好工作資料夾就能開始。
 
-> [Releases](https://github.com/satan0124/AgentDesk/releases) 的 Source code zip（v0.1.5）比對話／工作模式、逐字稿、壓縮都早。要用這些功能，請用 `git clone`。
+也可以到 [Releases](https://github.com/satan0124/AgentDesk/releases/latest) 下載「Source code (zip)」解壓縮，不用 git。
 
 ## 範例：Claude 把修正交給 Codex
 

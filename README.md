@@ -34,7 +34,7 @@ Double-click `AgentDesk.bat` in the folder. The first run installs dependencies 
 
 On first launch, if Claude Code is missing or not signed in, Settings opens so you can click **Install** and **Sign in**. Pick a working folder for the chat and start.
 
-> The Source code zip on [Releases](https://github.com/satan0124/AgentDesk/releases) (v0.1.5) predates chat / work mode, transcripts and compression. Use `git clone` to get them.
+You can also download **Source code (zip)** from [Releases](https://github.com/satan0124/AgentDesk/releases/latest) and unzip it instead of cloning.
 
 ## Example: Claude hands a fix to Codex
 
