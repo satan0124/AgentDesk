@@ -648,6 +648,10 @@ async function unitTests() {
       u('3'), a(null), u('4'), a({ topic: 'Docs', result: 'r4', files: '-' }), u('5'), { role: 'assistant', parts: [], status: 'error' }];
     const e = noteEntries(msgs, 1, 10);
     assert(JSON.stringify(e) === JSON.stringify([{ from: 1, to: 4, topic: 'Login', result: 'r1', files: 'a.js、b.js' }, { from: 7, to: 8, topic: 'Docs', result: 'r4', files: '-' }]), JSON.stringify(e));
+    // 同主題的不同結論接起來（實測 Codex 把幾個問題歸在同一主題，只留最新的會丟答案）；太長從前面截掉、最新的留著
+    const two = (r1, r2) => noteEntries([u('1'), a({ topic: 'QA', result: r1, files: '-' }), u('2'), a({ topic: 'QA', result: r2, files: '-' })], 1, 4)[0].result;
+    const long = two('x'.repeat(200), 'y'.repeat(200));
+    assert(two('12 PASS', '先驗滑鼠') === '12 PASS；先驗滑鼠' && two('a', 'a') === 'a' && two('未定', 'b') === 'b' && long.length === 300 && long.startsWith('…') && long.endsWith('y'.repeat(200)), two('12 PASS', '先驗滑鼠'));
     // 從中間開始時，回覆前面那則使用者的話已經在索引裡 → 這筆只涵蓋回覆那一則
     assert(JSON.stringify(noteEntries(msgs, 2, 4).map(x => [x.from, x.to])) === '[[2,4]]', JSON.stringify(noteEntries(msgs, 2, 4)));
     // 沒記到的：#5–#6 有回覆文字要請 Agent 寫；#9–#10 只有出錯、沒有文字的回合，補佔位就好

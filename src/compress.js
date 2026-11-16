@@ -65,8 +65,16 @@ function parseNote(text) {
 const vague = s => !s || /^(-|未定|TBD|N\/A|none)$/i.test(String(s).trim());
 const topicKey = s => String(s || '').replace(/[\s「」“”"'`]/g, '').toLowerCase();
 const fileList = s => String(s || '').split(/\s*[、,，;；]\s*/).map(x => x.trim()).filter(x => x && x !== '-');
+// 合併時的結論：不同的結論用「；」接起來（實測 Codex 把幾個相關的問題都歸在同一個主題，只留最新的會丟掉前面的答案）；
+// 太長就從前面截掉，最新的一定留著。最新的是「未定」就不接
+function joinResult(a, b) {
+  if (vague(b)) return a;
+  if (vague(a) || a === b || a.endsWith(`；${b}`)) return vague(a) ? b : a;
+  const s = `${a}；${b}`;
+  return s.length > FIELD_MAX ? '…' + s.slice(s.length - FIELD_MAX + 1) : s;
+}
 // 第 from 到 to 段裡記下的索引（messages 是整個對話，編號 1 起）。一輪是使用者那則加上回覆那則；
-// 連續幾輪主題相同的合成一筆：範圍接起來、結論用最新的（最新的是「未定」就留前面的）、檔案合併
+// 連續幾輪主題相同的合成一筆：範圍接起來、結論接起來（見 joinResult）、檔案合併
 function noteEntries(messages, from, to) {
   const out = [];
   for (let k = from; k <= to; k++) {
@@ -76,7 +84,7 @@ function noteEntries(messages, from, to) {
     const p = out[out.length - 1];
     if (p && p.to + 1 === a && topicKey(p.topic) === topicKey(m.note.topic)) {
       p.to = k;
-      if (!vague(m.note.result)) p.result = m.note.result;
+      p.result = joinResult(p.result, m.note.result);
       const files = [...new Set([...fileList(p.files), ...fileList(m.note.files)])];
       p.files = files.length ? files.join('、') : '-';
     } else out.push({ from: a, to: k, topic: m.note.topic, result: m.note.result || '-', files: m.note.files || '-' });
