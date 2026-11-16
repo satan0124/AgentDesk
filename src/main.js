@@ -86,7 +86,8 @@ function saveConv(c, touch = true) { if (touch) c.updated = Date.now(); fs.write
 const saveTimers = new Map();
 function saveSoon(c) {
   if (saveTimers.has(c.id)) return;
-  saveTimers.set(c.id, setTimeout(() => { saveTimers.delete(c.id); saveConv(c); }, 2000));
+  // 計時器到的時候對話可能已經被刪掉（例如委派的 Agent 在刪除後才結束、又發了事件）：被刪的就不存，免得刪掉的對話回來
+  saveTimers.set(c.id, setTimeout(() => { saveTimers.delete(c.id); if (convs.get(c.id) === c) saveConv(c); }, 2000));
 }
 function listConvs() {
   const out = [];
@@ -501,6 +502,8 @@ async function delegate({ conv: convId, agent, prompt, newSession }) {
     r = await run.promise;
     ctx.stops.delete(run.stop);
   } catch (e) { r = { error: e?.message || String(e), text: '' }; }
+  // 等待中對話被刪掉：不再發事件、不存委派回覆（不然會重建逐字稿資料夾），只收掉右欄的工作
+  if (convs.get(convId) !== conv) { endJob(job, '已停止'); return { error: '已停止' }; }
   noteSize(conv, agent, r, resumed);
   sendMeta(conv);
   emitTo(conv, msg, { type: 'delegate_end', id, error: r.error });

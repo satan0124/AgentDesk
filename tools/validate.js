@@ -689,6 +689,9 @@ async function unitTests() {
     const dele = main.slice(main.indexOf('async function delegate('), main.indexOf('function saveDelegate('));
     assert(dele.indexOf('startJob(') < dele.indexOf('try {') && /\} catch \(e\) \{ r = \{ error:/.test(dele) && dele.indexOf('} catch (e)') < dele.indexOf("type: 'delegate_end'")
       && dele.indexOf("type: 'delegate_end'") < dele.indexOf('endJob(job, r.error)'), 'delegate 的收尾不完整');
+    // 等待中對話被刪掉：delegate 不再發事件、不存回覆；saveSoon 的計時器到時對話已被刪就不存
+    assert(/if \(convs\.get\(convId\) !== conv\) \{ endJob\(job, '已停止'\); return/.test(dele) && dele.indexOf('if (convs.get(convId) !== conv)') < dele.indexOf('noteSize(')
+      && /setTimeout\(\(\) => \{ saveTimers\.delete\(c\.id\); if \(convs\.get\(c\.id\) === c\) saveConv\(c\); \}/.test(main), '被刪的對話仍可能被存回去');
   });
 
   await check('「極度節省 token」規則：文字、放在哪、同一個 session 只附一次', () => {
