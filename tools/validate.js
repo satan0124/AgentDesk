@@ -642,6 +642,13 @@ async function unitTests() {
     const { verifyIndex } = require(path.join(SRC, 'compress.js'));
     const vf = exists => verifyIndex([{ from: 1, to: 2, topic: 't', result: 'r', files: 'README.zh-TW.md、ghost.md' }], { from: 1, to: 2, segText: () => '三種語言', edited: () => [], exists });
     assert(vf(f => f === 'README.zh-TW.md').entries[0].files === 'README.zh-TW.md' && vf(f => f === 'README.zh-TW.md').dropped === 1 && vf().entries[0].files === '-', JSON.stringify(vf(f => f === 'README.zh-TW.md')));
+    // 工作資料夾裡的絕對路徑轉成相對路徑寫進索引（跟動作記錄補的寫法一致）
+    const va = verifyIndex([{ from: 1, to: 2, topic: 't', result: 'r', files: 'E:\\Proj\\docs\\a.md' }], { from: 1, to: 2, segText: () => '', edited: () => ['src/b.js'],
+      exists: () => true, rel: f => f.replace('E:\\Proj\\', '').replace(/\\/g, '/') });
+    assert(va.entries[0].files === 'src/b.js、docs/a.md', va.entries[0].files);
+    // 主程序：exists 與 rel 都只認工作資料夾裡的路徑
+    const mainSrc = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+    assert(/const rel = f => \(path\.isAbsolute\(f\) && inCwd\(f\)/.test(mainSrc) && /verifyIndex\(uniq, \{[^}]*exists, rel \}\)/.test(mainSrc), '主程序沒有把 rel 傳給 verifyIndex');
     // 合併：主題相同（空白、引號、大小寫不計）又相鄰的一筆；結論用最新的，最新的是「未定」就留前面的；檔案合併
     const u = text => ({ role: 'user', text }), a = (note, text = 'ok') => ({ role: 'assistant', parts: [{ kind: 'text', text }], ...(note ? { note } : {}) });
     const msgs = [u('1'), a({ topic: 'Login', result: 'r1', files: 'a.js' }), u('2'), a({ topic: '「login」', result: '未定', files: 'a.js、b.js' }),

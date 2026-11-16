@@ -578,14 +578,11 @@ async function compress(convId, agent) {
     parsed.push(...got);
   }
   const uniq = [...notes, ...parsed.filter((e, i, all) => all.findIndex(x => indexLine(x) === indexLine(e)) === i)];
-  // 工作資料夾裡真的有的檔（相對路徑，或在工作資料夾裡的絕對路徑）
-  const exists = f => {
-    try {
-      const p = path.resolve(conv.cwd, f), rel = path.relative(path.resolve(conv.cwd), p);
-      return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) && fs.statSync(p).isFile();
-    } catch { return false; }
-  };
-  const checked = verifyIndex(uniq, { from, to, segText, edited: (a, b) => editedFiles(conv.messages.slice(a - 1, b), conv.cwd), tr, exists });
+  // 工作資料夾裡真的有的檔（相對路徑，或在工作資料夾裡的絕對路徑）；工作資料夾裡的絕對路徑寫進索引時轉成相對路徑
+  const inCwd = f => { const r = path.relative(path.resolve(conv.cwd), path.resolve(conv.cwd, f)); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : ''; };
+  const exists = f => { try { return !!inCwd(f) && fs.statSync(path.resolve(conv.cwd, f)).isFile(); } catch { return false; } };
+  const rel = f => (path.isAbsolute(f) && inCwd(f) ? inCwd(f).replace(/\\/g, '/') : f);
+  const checked = verifyIndex(uniq, { from, to, segText, edited: (a, b) => editedFiles(conv.messages.slice(a - 1, b), conv.cwd), tr, exists, rel });
   const entries = checked.entries;
   if (!error) {
     try {

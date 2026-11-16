@@ -198,7 +198,8 @@ const mentions = (text, name) => new RegExp(`(^|[^\\w.-])${esc(name)}(?![\\w-])`
 // - 範圍：照起點排好；中間漏掉的段落補一筆「沒有索引」的佔位（列出那幾段改過的檔），重疊的只計數。數字與結論不查（比對不準）。
 // segText(a, b)：第 a 到 b 段的逐字稿文字；edited(a, b)：第 a 到 b 段改過的檔
 // exists(f)：f 在工作資料夾裡真的有（有的就留，例如 Agent 當輪讀過、回覆裡只寫了「三種語言」沒寫檔名）
-function verifyIndex(entries, { from, to, segText, edited, tr = same, exists = () => false }) {
+// rel(f)：工作資料夾裡的絕對路徑轉成相對路徑，跟動作記錄補的寫法一致（不在工作資料夾裡的原樣留著）
+function verifyIndex(entries, { from, to, segText, edited, tr = same, exists = () => false, rel = f => f }) {
   let dropped = 0, overlaps = 0;
   const gaps = [];
   const fix = e => {
@@ -211,7 +212,7 @@ function verifyIndex(entries, { from, to, segText, edited, tr = same, exists = (
       if (!f || f === '-') continue;
       const name = baseName(f);
       if (!name || !(text.toLowerCase().includes(f.toLowerCase()) || mentions(text, name) || exists(f))) { dropped++; continue; }
-      if (!names.has(name.toLowerCase())) { names.add(name.toLowerCase()); extra.push(f); }
+      if (!names.has(name.toLowerCase())) { names.add(name.toLowerCase()); extra.push(rel(f)); }
     }
     return { ...e, files: fileField([...mech, ...extra], tr) };
   };
