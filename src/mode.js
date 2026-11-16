@@ -1,7 +1,7 @@
 // 對話／工作模式：每個對話各自記在 conv.mode。
 //   chat（對話）：問問題、討論、查資料，Agent 唯讀
 //   work（工作）：照設定頁的權限
-const { MARK } = require('./shared/reduce');
+const { MARK, hasMark } = require('./shared/reduce');
 const { workNote } = require('./work');
 const MODES = ['chat', 'work'];
 // 沒傳翻譯函式時（單元測試）照樣代入 {mark}
@@ -75,7 +75,7 @@ const RUN_TOOLS = /^(Bash|PowerShell)$/;
 function needWork({ text, denials, permission }) {
   const runOk = permission === 'bypassPermissions' || permission === 'auto';
   const denied = (denials || []).filter(d => EDIT_TOOLS.test(d.tool) || (runOk && RUN_TOOLS.test(d.tool)));
-  if (!denied.length && !String(text || '').includes(MARK)) return null;
+  if (!denied.length && !hasMark(text)) return null;
   return { denied: [...new Set(denied.map(d => `${d.tool} ${d.detail || ''}`.trim()))].slice(0, 5) };
 }
 

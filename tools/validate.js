@@ -673,6 +673,24 @@ async function unitTests() {
     assert(/noteAsk\(\{ prev: history\.findLast/.test(turn) && at('msg.note = note') > 0 && at('msg.note = note') < at("type: 'status'"), 'startTurn 沒有附要求或取出索引行');
   });
 
+  await check('回合與壓縮的收尾：中途出錯也會清掉執行中；執行中被刪掉的對話不再存回去', () => {
+    const main = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+    const turn = main.slice(main.indexOf('async function startTurn('), main.indexOf('// Claude 經 MCP 委派過來'));
+    const comp = main.slice(main.indexOf('async function compress('), main.indexOf('function startServer('));
+    const fin = turn.slice(turn.lastIndexOf('} finally {'));
+    // startTurn：running.set 之後整段包在 try 裡，finally 結束工作、清掉執行中，對話還在才存檔與寫逐字稿；回合跑完發現對話已被刪就不再發事件
+    assert(turn.indexOf('running.set(convId, ctx)') < turn.indexOf('try {') && /if \(job\) endJob\(job, endError\)/.test(fin) && fin.includes('running.delete(convId)')
+      && /if \(convs\.get\(convId\) === conv\) \{ saveConv\(conv\); writeTranscript\(conv\); \}/.test(fin) && /await run\.promise;\s*\n\s*if \(convs\.get\(convId\) !== conv\)/.test(turn)
+      && /catch \(e\) \{[\s\S]*?status: 'error'/.test(turn), 'startTurn 的收尾不完整');
+    // compress：迴圈到寫索引整段包在 try 裡，丟例外時記成錯誤，照樣 endJob、清掉執行中
+    assert(comp.indexOf('running.set(convId, ctx)') < comp.indexOf('try {\n  for') && /\} catch \(e\) \{ error = e\?\.message \|\| String\(e\); \}\s*\n\s*const entries = checked\.entries;\s*\n\s*endJob\(job, error\);\s*\n\s*running\.delete\(convId\);/.test(comp),
+      'compress 的收尾不完整');
+    // delegate：從 startJob 到等結果包在 try 裡，丟例外記成錯誤，照樣發 delegate_end、endJob
+    const dele = main.slice(main.indexOf('async function delegate('), main.indexOf('function saveDelegate('));
+    assert(dele.indexOf('startJob(') < dele.indexOf('try {') && /\} catch \(e\) \{ r = \{ error:/.test(dele) && dele.indexOf('} catch (e)') < dele.indexOf("type: 'delegate_end'")
+      && dele.indexOf("type: 'delegate_end'") < dele.indexOf('endJob(job, r.error)'), 'delegate 的收尾不完整');
+  });
+
   await check('「極度節省 token」規則：文字、放在哪、同一個 session 只附一次', () => {
     const { frugalNote, frugalPlace } = require(path.join(SRC, 'mode.js'));
     const { t, setLang } = require(path.join(SRC, 'shared', 'i18n.js'));
@@ -711,7 +729,10 @@ async function unitTests() {
     assert(needWork({ text: 'x', denials: [{ tool: 'WebFetch', detail: 'https://x' }], permission: 'bypassPermissions' }) === null, '和改檔無關的工具不應算');
     // 標記：任何 Agent 都適用，含委派卡片裡的回覆
     assert(needWork({ text: `要改 a.js\n${MARK}` })?.denied.length === 0 && needWork({ text: '只是回答' }) === null, '標記判斷不對');
-    const m = { parts: [{ kind: 'text', text: `要改 a.js\n${MARK}` }, { kind: 'delegate', id: 'd', agent: 'codex', parts: [{ kind: 'text', text: `b ${MARK}` }] }] };
+    // 只認行首的標記：內文提到（例如解釋程式碼）不算要改檔，也不能被拿掉
+    const inl = `stripMark 會移除 \`${MARK}\` 標記`;
+    assert(needWork({ text: inl }) === null && stripMark(inl) === inl && needWork({ text: `- **${MARK}**` }) && stripMark(`x\n**${MARK}**\ny`) === 'x\ny', '行內標記判斷不對');
+    const m = { parts: [{ kind: 'text', text: `要改 a.js\n${MARK}` }, { kind: 'delegate', id: 'd', agent: 'codex', parts: [{ kind: 'text', text: `b\n${MARK}` }] }] };
     assert(needWork({ text: partsText([m.parts[1]]) }), '委派卡片裡的標記沒有算到');
     // 回合結束：記下 needWork，標記從存下來的文字拿掉
     applyEvent(m, { type: 'status', status: 'done', needWork: { denied: [] } });

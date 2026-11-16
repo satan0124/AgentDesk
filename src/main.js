@@ -400,11 +400,13 @@ async function startTurn(convId, agent, text, attachments = []) {
   const ctx = { conv, msg, stops: new Set() };
   running.set(convId, ctx);
   send('conv:changed', listConvs());
-
+  // 從這裡起不管哪條路結束（正常、出錯、中途丟例外）都要收尾：結束工作、清掉執行中、存檔；不然對話會一直卡在執行中
+  let job = null, endError = '';
+  try {
   const cfg = cfgFor(conv, agent);
   freshIfStuck(conv, agent);
   ensureWorkFile(conv);
-  const job = startJob(agent, conv, 'main', text || tr('（附件）'));
+  job = startJob(agent, conv, 'main', text || tr('（附件）'));
   ctx.job = job;
   const freshSession = !conv.sessions[agent];
   const { prompt, chars: ctxChars, seen } = buildPrompt(conv, agent, (text || tr('請看附件。')) + attachText(atts), history);
@@ -439,6 +441,7 @@ async function startTurn(convId, agent, text, attachments = []) {
   const run = runAgent(agent, cfg, opts);
   ctx.stops.add(run.stop);
   const r = await run.promise;
+  if (convs.get(convId) !== conv) { endError = r.error || '已停止'; return; }   // 執行中對話被刪掉：不再發事件、不記 session（finally 收尾）
   // session 失效（例如 CLI 端被刪）：清掉，下一次重開並帶上下文
   if (r.error && /session|thread|chat/i.test(r.error) && /not found|no conversation|找不到|invalid/i.test(r.error)) dropSession(conv, agent);
   else noteSize(conv, agent, r, !!opts.sessionId);
@@ -454,12 +457,18 @@ async function startTurn(convId, agent, text, attachments = []) {
     ? needWork({ text: partsText(msg.parts), denials: r.denials, permission: settings.agents[agent]?.permission }) : null;
   emitTo(conv, msg, { type: 'status', status: r.error ? (r.error === '已停止' ? 'stopped' : 'error') : 'done', error: r.error,
     meta: { cost: r.cost, usage: r.usage }, ...(need ? { needWork: need } : {}) });
-  endJob(job, r.error);
-  running.delete(convId);
-  clearTimeout(saveTimers.get(convId)); saveTimers.delete(convId);
-  saveConv(conv);
-  writeTranscript(conv);
-  send('conv:changed', listConvs());
+  endError = r.error;
+  } catch (e) {
+    endError = e?.message || String(e);
+    if (msg.status === 'running') emitTo(conv, msg, { type: 'status', status: 'error', error: endError });
+  } finally {
+    if (job) endJob(job, endError);
+    running.delete(convId);
+    clearTimeout(saveTimers.get(convId)); saveTimers.delete(convId);
+    // 執行中被刪掉的對話不要再存回去（不然刪掉的對話會在回合結束後回來）
+    if (convs.get(convId) === conv) { saveConv(conv); writeTranscript(conv); }
+    send('conv:changed', listConvs());
+  }
 }
 
 // Claude 經 MCP 委派過來
@@ -472,22 +481,26 @@ async function delegate({ conv: convId, agent, prompt, newSession }) {
   emitTo(conv, msg, { type: 'delegate_start', id, agent, prompt });
   if (ctx.job) trackEvent(ctx.job, { type: 'delegate_start', agent });
   const job = startJob(agent, conv, 'delegate', prompt);
-  if (newSession) dropSession(conv, agent);
-  freshIfStuck(conv, agent);
-  // 被委派的 Agent 跟著這個對話的模式：對話模式一樣唯讀，說明放在 Claude 給的 prompt 前面（卡片上顯示的仍是原本的 prompt）
-  const { prefix } = notesFor(conv, agent, 'delegate');
-  const resumed = !!conv.sessions[agent];
-  // 最後附上收尾格式（做了什麼、改了哪些檔、沒做完的），Claude 拿到的回覆有上限，結論要在固定的地方
-  const ask = `${prefix ? `${prefix}\n\n` : ''}${prompt}\n\n${delegateTail(tr)}`;
-  const run = runAgent(agent, cfgFor(conv, agent), { prompt: ask, cwd: conv.cwd, sessionId: conv.sessions[agent], onEvent: ev => {
-    if (ev.type === 'session') { if (ev.id) conv.sessions[agent] = ev.id; return; }
-    if (ev.type === 'limits') return setLimits(agent, ev);
-    trackEvent(job, ev);
-    emitTo(conv, msg, { ...ev, del: id });
-  } });
-  ctx.stops.add(run.stop);
-  const r = await run.promise;
-  ctx.stops.delete(run.stop);
+  // 中途丟例外也要收尾（卡片結束、右欄工作結束），不然卡片會一直顯示執行中
+  let r, resumed = false;
+  try {
+    if (newSession) dropSession(conv, agent);
+    freshIfStuck(conv, agent);
+    // 被委派的 Agent 跟著這個對話的模式：對話模式一樣唯讀，說明放在 Claude 給的 prompt 前面（卡片上顯示的仍是原本的 prompt）
+    const { prefix } = notesFor(conv, agent, 'delegate');
+    resumed = !!conv.sessions[agent];
+    // 最後附上收尾格式（做了什麼、改了哪些檔、沒做完的），Claude 拿到的回覆有上限，結論要在固定的地方
+    const ask = `${prefix ? `${prefix}\n\n` : ''}${prompt}\n\n${delegateTail(tr)}`;
+    const run = runAgent(agent, cfgFor(conv, agent), { prompt: ask, cwd: conv.cwd, sessionId: conv.sessions[agent], onEvent: ev => {
+      if (ev.type === 'session') { if (ev.id) conv.sessions[agent] = ev.id; return; }
+      if (ev.type === 'limits') return setLimits(agent, ev);
+      trackEvent(job, ev);
+      emitTo(conv, msg, { ...ev, del: id });
+    } });
+    ctx.stops.add(run.stop);
+    r = await run.promise;
+    ctx.stops.delete(run.stop);
+  } catch (e) { r = { error: e?.message || String(e), text: '' }; }
   noteSize(conv, agent, r, resumed);
   sendMeta(conv);
   emitTo(conv, msg, { type: 'delegate_end', id, error: r.error });
@@ -551,7 +564,9 @@ async function compress(convId, agent) {
   // 沒有進程檔的對話另外要「現況／下一步」（有進程檔的，狀態寫在進程檔裡）：只在最後一批要，它看得到最近的內容
   const wantState = !workOf(conv);
   const parsed = [];
-  let error = '', r = {};
+  let error = '', r = {}, checked = { entries: [] };
+  // 中途丟例外也要收尾（結束工作、清掉執行中），不然對話會一直卡在壓縮中
+  try {
   for (let k = 0; k < parts.length && !error; k++) {
     const [a, b] = parts[k];
     ctx.compress = { ...ctx.compress, part: k + 1 };
@@ -582,18 +597,19 @@ async function compress(convId, agent) {
   const inCwd = f => { const r = path.relative(path.resolve(conv.cwd), path.resolve(conv.cwd, f)); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : ''; };
   const exists = f => { try { return !!inCwd(f) && fs.statSync(path.resolve(conv.cwd, f)).isFile(); } catch { return false; } };
   const rel = f => (path.isAbsolute(f) && inCwd(f) ? inCwd(f).replace(/\\/g, '/') : f);
-  const checked = verifyIndex(uniq, { from, to, segText, edited: (a, b) => editedFiles(conv.messages.slice(a - 1, b), conv.cwd), tr, exists, rel });
-  const entries = checked.entries;
+  checked = verifyIndex(uniq, { from, to, segText, edited: (a, b) => editedFiles(conv.messages.slice(a - 1, b), conv.cwd), tr, exists, rel });
   if (!error) {
     try {
       if (!had) fs.writeFileSync(indexFile(convId), indexHead(conv.title, tr));
-      fs.appendFileSync(indexFile(convId), entries.map(indexLine).join('\n') + '\n');
+      fs.appendFileSync(indexFile(convId), checked.entries.map(indexLine).join('\n') + '\n');
       conv.indexed = to; conv.sessions = {}; conv.sizes = {}; conv.seen = {};
       // 現況／下一步每次整個換掉（不追加）；這次沒寫出來就留著上一次的，附上時會註明是到 #幾的狀態
       const st = wantState ? parseState(`${r.text || ''}\n${r.final || ''}`) : null;
       if (st) conv.state = { ...st, at: to };
     } catch (e) { error = tr('索引寫不進去：{error}', { error: e.message }); }
   }
+  } catch (e) { error = e?.message || String(e); }
+  const entries = checked.entries;
   endJob(job, error);
   running.delete(convId);
   if (convs.get(convId) === conv) saveConv(conv, false);   // 壓縮途中對話被刪掉就不要再存回去

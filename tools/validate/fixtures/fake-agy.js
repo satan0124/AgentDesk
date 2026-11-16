@@ -30,6 +30,9 @@ process.stdin.on('data', c => { d += c; }).on('end', () => {
   ev({ event: 'step_update', step_update: { conversation_id: id, step_index: 1, state: 'ACTIVE', step_type: 'tool', tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { command: 'dir' } } } });
   ev({ event: 'step_update', step_update: { conversation_id: id, step_index: 1, state: 'DONE', step_type: 'tool', tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { command: 'dir' }, output: 'ok' } } });
   ev({ event: 'step_update', step_update: { conversation_id: id, step_index: 2, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'agy got: ' } });
-  ev({ event: 'step_update', step_update: { conversation_id: id, step_index: 2, state: 'ACTIVE', step_type: 'agent_response', text_delta: `${content.split('\n').pop().slice(0, 40)} conv=${id} head=${content.split('\n')[0].slice(0, 12)}` } });
+  // 使用者的話帶著「要改檔」標記時，照約定把標記另起一行寫在最後（行內提到的不算）
+  const lastLine = content.split('\n').pop(), WORK = '[[agentdesk:work]]';
+  ev({ event: 'step_update', step_update: { conversation_id: id, step_index: 2, state: 'ACTIVE', step_type: 'agent_response',
+    text_delta: `${lastLine.replace(WORK, '').trim().slice(0, 40)} conv=${id} head=${content.split('\n')[0].slice(0, 12)}${lastLine.includes(WORK) ? `\n${WORK}` : ''}` } });
   ev({ event: 'result', result: { conversation_id: id, status: 'SUCCESS', response: 'unused', num_turns: 1, usage: { total_tokens: 5 } } });
 });
