@@ -41,6 +41,9 @@ git clone https://github.com/satan0124/AgentDesk.git
 
 就是上面截图里的对话。
 
+<p align="center"><img src="assets/readme/delegate-zh-CN.gif" width="800" alt="动画：请 Claude 检查登录流程，Claude 读了三个文件后把修复交给 Codex，Codex 的卡片显示改文件与 npm test，最后 Claude 汇报；右栏同时显示两个 Agent 工作中"></p>
+<p align="center"><sub>在真实程序里摆拍的演示，速度加快了。实际委派通常要几分钟。</sub></p>
+
 1. 在工作模式下问 Claude：“帮我检查登录流程。如果 401 的处理有问题，请 Codex 修好并跑测试。”
 2. Claude 读过代码，发现 `request()` 把 401 吞掉了，把修复交给 Codex。
 3. Codex 的卡片实时显示它的修改和测试，最后写出做了什么、改了哪些文件、还有什么没做完。

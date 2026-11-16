@@ -41,6 +41,9 @@ git clone https://github.com/satan0124/AgentDesk.git
 
 就是上面截圖裡的對話。
 
+<p align="center"><img src="assets/readme/delegate-zh-TW.gif" width="800" alt="動畫：請 Claude 檢查登入流程，Claude 讀了三個檔後把修正交給 Codex，Codex 的卡片顯示改檔與 npm test，最後 Claude 回報；右欄同時顯示兩個 Agent 工作中"></p>
+<p align="center"><sub>在真的程式裡擺拍的示範，速度加快了。實際委派通常要幾分鐘。</sub></p>
+
 1. 在工作模式下問 Claude：「幫我檢查登入流程。如果 401 的處理有問題，請 Codex 修好並跑測試。」
 2. Claude 讀過程式，發現 `request()` 把 401 吞掉了，把修正交給 Codex。
 3. Codex 的卡片即時顯示它的修改和測試，最後寫出做了什麼、改了哪些檔、還有什麼沒做完。

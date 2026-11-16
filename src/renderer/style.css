@@ -6,6 +6,8 @@
   --font: "Segoe UI", "Microsoft JhengHei UI", "PingFang TC", system-ui, sans-serif;
   --mono: "Cascadia Code", Consolas, "Courier New", monospace;
 }
+/* 簡中介面改用簡體字型：JhengHei 會把「输」「额」這類字畫成繁體字形（html lang 由 app.js 的 translateDom 設定） */
+:root:lang(zh-Hans) { --font: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif; }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { display: flex; background: var(--bg); color: var(--text); font: 14px/1.6 var(--font); overflow: hidden; }

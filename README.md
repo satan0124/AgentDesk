@@ -41,6 +41,9 @@ You can also download **Source code (zip)** from [Releases](https://github.com/s
 
 This is the chat in the screenshot above.
 
+<p align="center"><img src="assets/readme/delegate-en.gif" width="800" alt="Animation: you ask Claude to check the login flow, Claude reads three files, hands the fix to Codex, the Codex card shows the edit and npm test, and Claude reports back while the right panel shows both agents working"></p>
+<p align="center"><sub>Staged demo in the real app, sped up. A real delegation usually takes a few minutes.</sub></p>
+
 1. In work mode you ask Claude: "Check the login flow. If the 401 handling is wrong, have Codex fix it and run the tests."
 2. Claude reads the code, finds that `request()` swallows 401 responses, and delegates the fix to Codex.
 3. The Codex card shows its edits and the test run as they happen. Codex ends with what it did, which files changed, and what is unfinished.
