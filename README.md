@@ -75,7 +75,7 @@ On first launch, if Claude Code is missing or not signed in, AgentDesk opens Set
 - **Chats**: chat history on the left, searchable and grouped by date or by project (working folder), Ctrl+N for a new chat. Right-click a chat to pin, rename, archive or delete it. Each chat has its own working folder and its own unsent draft.
 - **Chat mode and work mode**: every chat has its own mode. Switch the open chat with 💬 / 🛠 at the top right of the left sidebar, next to **New chat** (not while a turn is running). New chats start in chat mode, where agents can read but not change anything (custom agents only get an instruction in the prompt). When an agent needs to change a file, it says what it would change and **Switch to work mode and continue** appears under the reply; the same agent carries on once you click it. Work mode uses the permissions from Settings.
 - **Work and progress files**: when you switch to work mode you can name the work, and AgentDesk creates `docs/進程/<work name>.md` in the working folder. This progress file is the handover file: task list, progress, decisions and verification. AgentDesk tells the agent to list the tasks first, wait for your approval, and update the file on turns that make progress. In a new chat, **Resume work** above the input box lets you pick an existing progress file and carry on; **Work status** in the right panel shows the resume notes and the task list. When one more task is marked done and the largest session in the chat is 50,000 tokens or more, a line above the input box suggests restarting; **Restart sessions** clears every agent's session in this chat, and since the state lives in the progress file, no progress is lost. For a small fix that needs no file, choose **No progress file**.
-- **Multiple agents**: only Claude is enabled by default. Add Codex or Cursor the same way as a custom agent: pick it under **Add another CLI agent** at the bottom of Settings and click **+ Add agent**. Switch who you talk to below the input box (Alt+1–9).
+- **Multiple agents**: only Claude Code is enabled by default. Add others under **Add another CLI agent** at the bottom of Settings, where you can also install and sign in. Supported: Codex CLI and Cursor Agent CLI, plus a template for Antigravity CLI (`agy`); any other CLI can be added by setting its command and output format. Switch who you talk to below the input box (Alt+1–9).
 - **Model per chat**: click the model name on an agent card in the right panel to pick the model and effort for this chat. Other chats keep the defaults from Settings. Claude lists four common models up front and the rest under **More models**.
 - **Delegation**: Claude hands work to other agents through built-in MCP tools (`ask_<agent>`). Each delegation shows up as a card with that agent's tool calls and reply as they happen. AgentDesk asks the delegated agent to end its reply with three lines: what it did, which files it changed, and what is unfinished or worth noting. If the reply is too long, the full text is saved to a file that Claude reads when it needs to.
 - **Actions in replies**: when an agent runs two or more tool actions in a row (reading files, running commands), the reply folds them into one line showing the count, how many failed and the latest action; click it to expand. Folding only changes the display: the actions still run and use the same quota.
@@ -87,7 +87,6 @@ On first launch, if Claude Code is missing or not signed in, AgentDesk opens Set
 - **Images**: images in replies fit the column width; click one for a full-screen preview (wheel to zoom, drag to pan, ←/→ to switch, Esc to close).
 - **Agent activity panel**: shows the current chat only: whether each agent is idle or working, what it is doing and for how long, plus work recently finished in this chat. Each card also shows remaining usage (5-hour and weekly; Cursor does not report it). Each card also shows the size of that agent's session in this chat, which is how many tokens are re-sent at minimum on every later turn (exact for Claude, estimated for Codex and Cursor). **Restart** clears just that agent's session. Above 100,000 the size is flagged and **Compress** appears next to it: it does the same as 🗜 in the top bar, with the agent on that card writing the index.
 - **Connect CLIs**: Settings detects whether each CLI is installed, its version and the signed-in account, and can install, sign in or locate it.
-- **Custom agents**: **Add another CLI agent** at the bottom of Settings, with templates for Antigravity CLI (`agy`), Claude-compatible stream-json and any plain-text CLI. Configure the command, arguments, how the prompt is passed, output format, model, resume flag, a description for Claude, and more.
 - **Language**: English, Traditional Chinese and Simplified Chinese. By default it follows the system: Traditional Chinese systems get Traditional Chinese, Simplified Chinese systems get Simplified Chinese, everything else gets English. You can change it in Settings.
 
 ## Permissions
@@ -115,11 +114,6 @@ Progress files are not stored here. They live under `docs/進程/` in each worki
 - `src/shared/i18n.js`: UI translations.
 - `src/renderer/`: the UI.
 - `tools/make-icon.js`: builds the icon from `build/icon.svg`.
-
-## Using Antigravity
-1. Settings → pick **Antigravity CLI (agy)** under **Add another CLI agent** → **+ Add agent** → **Install**.
-2. Click **Sign in**: this opens an interactive `agy` session; finish the sign-in wizard there, then close it.
-3. Save.
 
 ## Validation
 ```bash
