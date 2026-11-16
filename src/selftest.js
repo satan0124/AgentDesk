@@ -1,5 +1,5 @@
 // 開發用：AGENTDESK_SELFTEST=<輸出資料夾> 時自動跑幾輪對話、截圖後關閉。
-//   AGENTDESK_SELFTEST_STEPS  '[["claude","...",["附件路徑"]],["codex","..."]]'
+//   AGENTDESK_SELFTEST_STEPS  '[["claude","...",["附件路徑"]],["codex","..."]]'；["@mode","work"] 是切換模式
 //   AGENTDESK_SELFTEST_MIDSHOT 執行中第幾毫秒截一張 mid.png
 //   AGENTDESK_SELFTEST_SHOTS  '[["名稱","截圖前執行的 JS"]]'，預設 final + settings
 //   AGENTDESK_SELFTEST_ATTACH '["路徑"]'：final 前放進待送附件並打開＋選單
@@ -25,6 +25,8 @@ module.exports = function selftest({ app, getWin, newConv, startTurn, getConv, a
     if (env('MIDSHOT')) setTimeout(() => capture('mid'), +env('MIDSHOT'));
     for (const [agent, text, files] of steps) {
       console.log('[st] step', agent);
+      // ["@mode","work"]：把這個對話切到另一種模式再跑後面的步驟
+      if (agent === '@mode') { getConv(conv.id).mode = text; continue; }
       try { await startTurn(conv.id, agent, text, addAttachments((files || []).map(p => ({ path: p })))); }
       catch (err) { console.log('[st] error', agent, err.message); continue; }
       const m = getConv(conv.id).messages.at(-1);

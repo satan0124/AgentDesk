@@ -13,7 +13,8 @@ const TOOLS = HELPERS.map(h => ({
   name: `ask_${h.id}`,
   description: `Hand a task to ${h.name} (${h.id}); it runs in the same working folder and returns its final reply. ` +
     `${h.name} cannot see this conversation, so the prompt must be self-contained: goal, relevant files, constraints, definition of done. ` +
-    `Within one chat it continues its previous session by default (if supported); set new_session=true to start fresh.`,
+    `Within one chat it continues its previous session by default (if supported); set new_session=true when the task is unrelated to its earlier work, since a fresh session re-sends less history and uses less quota. ` +
+    `Long replies are trimmed before they reach you; the full text is shown to the user in AgentDesk.`,
   inputSchema: {
     type: 'object',
     properties: {

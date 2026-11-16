@@ -16,7 +16,14 @@
       if (d) { d.status = ev.error ? (ev.error === '已停止' ? 'stopped' : 'error') : 'done'; d.error = ev.error; }
       return;
     }
-    if (ev.type === 'status') { msg.status = ev.status; if (ev.error) msg.error = ev.error; if (ev.meta) msg.meta = ev.meta; return; }
+    if (ev.type === 'context') { msg.ctxChars = ev.chars; return; }
+    if (ev.type === 'status') {
+      msg.status = ev.status; if (ev.error) msg.error = ev.error; if (ev.meta) msg.meta = ev.meta;
+      // 對話模式下 Agent 想改檔：畫面依此顯示「切到工作模式並繼續」
+      if (ev.needWork) msg.needWork = ev.needWork;
+      cleanMark(msg.parts);
+      return;
+    }
     const parts = targetParts(msg, ev);
     const last = parts[parts.length - 1];
     if (ev.type === 'text') {
@@ -35,7 +42,28 @@
     }
   }
 
-  const api = { applyEvent };
+  // 對話模式（唯讀）下，Agent 需要改檔時在回覆最後另起一行寫這個標記（見 mode.js 的說明）；
+  // 主程序據此讓畫面出現切換按鈕，標記本身不顯示、也不留在存檔裡。
+  const MARK = '[[agentdesk:work]]';
+  // live：還在串流時，連結尾「打到一半的標記」也先藏起來，免得閃一下
+  function stripMark(text, live) {
+    let s = String(text || '');
+    if (s.includes(MARK)) return s.split(MARK).join('').replace(/\s+$/, '');
+    if (live) for (let n = MARK.length - 1; n >= 2; n--) if (s.endsWith(MARK.slice(0, n))) return s.slice(0, -n);
+    return s;
+  }
+  function cleanMark(parts) {
+    for (const p of parts || []) {
+      if (p.kind === 'text') p.text = stripMark(p.text);
+      else if (p.kind === 'delegate') cleanMark(p.parts);
+    }
+  }
+  // 訊息裡所有文字（含委派卡片內的）
+  function partsText(parts) {
+    return (parts || []).map(p => (p.kind === 'text' ? p.text : p.kind === 'delegate' ? partsText(p.parts) : '')).join('\n');
+  }
+
+  const api = { applyEvent, MARK, stripMark, partsText };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Reduce = api;
 })(this);

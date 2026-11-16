@@ -50,9 +50,13 @@ function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, 
     }
     return { file: base[0], args: [...base.slice(1), ...args], cwd, stdin: prompt };
   }
+  // cfg.readOnly（對話模式）：不管設定頁選什麼權限，一律換成各 CLI 的唯讀做法。
+  //   Claude：--permission-mode default，-p 沒有人能回答詢問，改檔與非唯讀指令會被拒（列在 result 的 permission_denials）
+  //   Codex：sandbox_mode="read-only"；Cursor：拿掉 --force，改 --mode ask（設定是 plan 就維持 plan，同樣唯讀）
+  //   自訂 Agent 沒有共通旗標，上面已經 return，只能靠 prompt 裡的說明（mode.js）
   if (agent === 'claude') {
     args.push('-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--permission-mode', cfg.permission || 'acceptEdits');
+      '--permission-mode', cfg.readOnly ? (cfg.permission === 'plan' ? 'plan' : 'default') : cfg.permission || 'acceptEdits');
     if (addDirs.length) args.push('--add-dir', ...addDirs);
     if (cfg.model) args.push('--model', cfg.model);
     if (cfg.effort) args.push('--effort', cfg.effort);
@@ -62,14 +66,14 @@ function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, 
   } else if (agent === 'codex') {
     args.push('exec');
     if (sessionId) args.push('resume', sessionId);
-    args.push('--json', '--skip-git-repo-check', '-c', `sandbox_mode="${cfg.sandbox || 'workspace-write'}"`);
+    args.push('--json', '--skip-git-repo-check', '-c', `sandbox_mode="${cfg.readOnly ? 'read-only' : cfg.sandbox || 'workspace-write'}"`);
     if (cfg.model) args.push('-m', cfg.model);
     if (cfg.effort) args.push('-c', `model_reasoning_effort="${cfg.effort}"`);
     for (const img of images) args.push(`--image=${img}`);
     args.push('-');
   } else if (agent === 'cursor') {
     args.push('-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust');
-    const perm = cfg.permission || 'force';
+    const perm = cfg.readOnly ? (cfg.permission === 'plan' ? 'plan' : 'ask') : cfg.permission || 'force';
     if (perm === 'force') args.push('--force');
     else if (perm === 'ask') args.push('--mode', 'ask');
     else if (perm === 'plan') args.push('--mode', 'plan');
@@ -102,11 +106,15 @@ function claudeParser(emit, state) {
           else if (e.delta?.type === 'thinking_delta') emit({ type: 'thinking', text: e.delta.thinking });
         } else if (e.type === 'message_start') {
           if (state.streamed) emit({ type: 'text', text: '\n\n' });
+        } else if (e.type === 'message_delta' && e.usage) {
+          state.lastUsage = { ...state.lastUsage, ...e.usage };   // 這個請求收尾時的輸出量
         }
         break;
       }
       case 'assistant':
         if (evt.parent_tool_use_id) break;
+        // 每個請求各自的用量；最後一個請求的輸入量就是這個 session 現在的大小（見 sessionSize）
+        if (evt.message?.usage) state.lastUsage = evt.message.usage;
         for (const b of evt.message?.content || []) {
           if (b.type === 'tool_use') {
             const name = b.name.replace(/^mcp__agents__/, '');
@@ -135,6 +143,10 @@ function claudeParser(emit, state) {
         if (evt.is_error) state.error = evt.result || evt.subtype || 'Claude error';
         if (!state.streamed && evt.result) emit({ type: 'text', text: evt.result });
         state.usage = evt.usage; state.cost = evt.total_cost_usd;
+        // 被擋下的工具呼叫（-p 沒有人能回答詢問時自動拒絕）：對話模式用來判斷「想改檔」
+        if (evt.permission_denials?.length) {
+          state.denials = evt.permission_denials.map(d => ({ tool: d.tool_name, detail: short(toolDetail(d.tool_name, d.tool_input || {}), 160) }));
+        }
         break;
     }
   };
@@ -154,6 +166,8 @@ function codexParser(emit, state) {
       case 'item.updated':
       case 'item.completed': {
         const done = evt.type === 'item.completed';
+        // 工具類的項目每完成一個，模型就多發一次請求（估 session 大小用，見 sessionSize）
+        if (done && /^(command_execution|file_change|mcp_tool_call|web_search)$/.test(item.type)) state.steps = (state.steps || 0) + 1;
         if (item.type === 'agent_message') {
           if (done) { emit({ type: 'text', text: (state.texts++ ? '\n\n' : '') + (item.text || '') }); state.final = item.text; }
         } else if (item.type === 'reasoning') {
@@ -206,6 +220,7 @@ function cursorParser(emit, state) {
         const a = body.args || {};
         const name = key.replace(/ToolCall$/, '');
         const done = evt.subtype === 'completed';
+        if (done) state.steps = (state.steps || 0) + 1;
         const res = body.result || {};
         emit({ type: 'tool', id: evt.call_id, name, detail: a.command || a.path || a.pattern || a.globPattern || short(a, 160),
           status: done ? (res.error || res.rejected ? 'error' : 'done') : 'running',
@@ -336,13 +351,43 @@ function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt,
         const tail = errBuf.split(/\r?\n/).filter(l => l && !/rmcp::transport|^\s*at /.test(l)).slice(-8).join('\n');
         error = tr('{name} 結束碼 {code}', { name: labelOf(agent, cfg), code }) + (tail ? '\n' + tail : '');
       }
-      resolve({ text: collected.trim() || state.final || '', sessionId: state.session || sessionId,
-        error, usage: state.usage, cost: state.cost });
+      resolve({ text: collected.trim() || state.final || '', final: state.final || '', sessionId: state.session || sessionId,
+        error, usage: state.usage, cost: state.cost, denials: state.denials, kind, lastUsage: state.lastUsage, steps: state.steps || 0 });
     });
     child.stdin.on('error', () => {});
     child.stdin.end(cmd.stdin ?? '', 'utf8');
   });
   return { promise, stop: () => { state.stopped = true; killTree(child); } };
+}
+
+// ---------- session 大小 ----------
+// 這個 session 現在大約多大（tokens）＝之後每一輪至少要重送的量。各家回報方式不同（2026-11 用真的 CLI 量過）：
+//   Claude：每個請求各自回報，取最後一個請求的「輸入＋快取＋輸出」，是準的
+//   Codex：turn.completed 的 usage 是整個 session 的累計，一輪裡每發一次請求就把輸入再算一次
+//          → 這一輪的增量 ÷ 請求數（工具呼叫數＋1），是估的；接續的 session 要靠上一輪記下的 total 才算得出增量
+//   Cursor：result 的 usage 是這一輪各請求的加總，inputTokens 不含快取 → （輸入＋快取）÷ 請求數，是估的
+//   其他格式（自訂 Agent）：沒有量過，不顯示
+// r：runAgent 的結果；prev：上一輪記下的 { tokens, total }；resumed：這一輪是不是接續既有的 session
+// 回傳 { tokens, total? }，tokens 算不出來時是 null；完全沒有資料回傳 null
+function sessionSize(r, prev, resumed) {
+  const u = r?.usage || {};
+  const sum = (o, keys) => keys.reduce((s, k) => s + (Number(o?.[k]) || 0), 0);
+  const reqs = (r?.steps || 0) + 1;
+  if (r?.kind === 'claude') {
+    const t = sum(r.lastUsage || u, ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens']);
+    return t ? { tokens: t } : null;
+  }
+  if (r?.kind === 'codex') {
+    const total = sum(u, ['input_tokens']);
+    if (!total) return null;
+    const delta = !resumed ? total : typeof prev?.total === 'number' && total >= prev.total ? total - prev.total : null;
+    return { tokens: delta === null ? null : Math.round(delta / reqs), total };
+  }
+  if (r?.kind === 'cursor') {
+    const t = sum(u, ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens']);
+    return t ? { tokens: Math.round(t / reqs) } : null;
+  }
+  return null;
 }
 
 // ---------- 剩餘額度 ----------
@@ -431,6 +476,6 @@ function listModels(agent, cfg) {
   });
 }
 
-module.exports = { runAgent, listModels, readLimits, LABEL, labelOf };
+module.exports = { runAgent, listModels, readLimits, sessionSize, LABEL, labelOf };
 // 給 tools/validate.js 做單元測試用
 module.exports._test = { PARSERS, buildCommand, cursorModel, splitArgs, claudeWindows, codexWindows };
