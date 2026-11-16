@@ -1,6 +1,7 @@
 // 驗證用假 Claude（Claude 相容的 stream-json）：回覆最後一行，並照真的 CLI 的樣子回報用量。
 // 每個請求的用量在 assistant 事件裡，result 的 usage 是整輪加總；session 大小要取最後一個請求（40,107），不是加總。
 // 最後一行含 big 時，最後一個請求報 15 萬多（大 session）。每一輪都用 Edit 改一次 src/edited.js（壓縮時由動作記錄補「相關檔案」用）。
+// 使用者的話有「note X」時，回覆最後一行照 AgentDesk 的要求寫這一輪的索引（邊對話邊記）。
 // 收到壓縮的請求時：只替 #起 到 #迄-1 寫一筆（故意漏最後一段），resumed= 寫有沒有帶 --resume，相關檔案寫一個逐字稿裡沒有的檔
 const path = require('path');
 let d = '';
@@ -9,6 +10,10 @@ process.stdin.on('data', c => { d += c; }).on('end', () => {
   const ev = o => console.log(JSON.stringify(o));
   const i = process.argv.indexOf('--resume');
   const id = i > 0 ? process.argv[i + 1] : 'cc-1';
+  // 每輪最後附的「索引」要求（noteAsk）先拿掉，最後一行才是使用者的話；裡面帶的上一輪主題記下來回報
+  const ask = (d.match(/\[AgentDesk (?:索引|index)[^\n]*/) || [''])[0];
+  const prev = (ask.match(/(?:照抄|copy)\s*[「"“]([^」"”]+)[」"”]/) || [])[1] || 'none';
+  d = d.replace(/\n*\[AgentDesk (?:索引|index)[^\n]*\s*$/, '');
   const last = d.trim().split('\n').pop();
   const cm = d.match(/\[AgentDesk \S+ #(\d+)–#(\d+)\]/);
   ev({ type: 'system', subtype: 'init', session_id: id, model: 'fake' });
@@ -21,7 +26,9 @@ process.stdin.on('data', c => { d += c; }).on('end', () => {
       ev({ type: 'result', result: text, session_id: id, total_cost_usd: 0, usage: { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 4000, output_tokens: 1 } });
     }, 500);
   }
-  const text = `cc got: ${last.slice(0, 40)} session=${id}`;
+  // 使用者的話有「note X」時才照要求在最後一行寫索引（主題 topic-X），並回報收到的上一輪主題
+  const nm = ask && last.match(/note (\w+)/);
+  const text = `cc got: ${last.slice(0, 40)} session=${id}` + (nm ? ` prev=${prev}\n\n[[agentdesk:index]] topic-${nm[1]}｜result ${nm[1]}｜src/edited.js` : '');
   const read = /big/.test(last) ? 150000 : 40000;
   ev({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Edit', input: { file_path: path.join(process.cwd(), 'src', 'edited.js') } }],
     usage: { input_tokens: 2, cache_creation_input_tokens: 5000, cache_read_input_tokens: 30000, output_tokens: 1 } } });

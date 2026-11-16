@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 304" width="740" height="304" role="img" aria-labelledby="t d" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <title id="t">每個請求重送的 tokens</title>
+  <desc id="d">三個真實對話壓縮前後，每個請求重送的 tokens: 146 則 · Claude 52.3 萬 → 6.5 萬; 96 則 · Codex 20.5 萬 → 3 萬; 40 則 · Claude 65.3 萬 → 6.1 萬</desc>
+  <style>
+    .ink { fill: #0b0b0b; } .ink2 { fill: #52514e; } .muted { fill: #898781; }
+    .grid { stroke: #e1e0d9; stroke-width: 1; } .base { stroke: #c3c2b7; stroke-width: 1; }
+    .s1 { fill: #2a78d6; } .s2 { fill: #eb6834; } .num { font-variant-numeric: tabular-nums; }
+    @media (prefers-color-scheme: dark) {
+      .ink { fill: #f0efec; } .ink2 { fill: #c3c2b7; }
+      .grid { stroke: #2c2c2a; } .base { stroke: #383835; }
+      .s1 { fill: #3987e5; } .s2 { fill: #d95926; }
+    }
+  </style>
+  <text class="ink" x="0" y="20" font-size="16" font-weight="600">每個請求重送的 tokens</text>
+  <text class="ink2" x="0" y="40">壓縮前取平均，壓縮後取最大值</text>
+  <rect class="s1" x="170" y="52" width="12" height="12" rx="2"/><text class="ink2" x="188" y="62">壓縮前</text>
+  <rect class="s2" x="330" y="52" width="12" height="12" rx="2"/><text class="ink2" x="348" y="62">壓縮後</text>
+  <line class="base" x1="170" x2="170" y1="72" y2="278"/><text class="muted num" x="170" y="294" text-anchor="middle">0</text>
+  <line class="grid" x1="312.8571428571429" x2="312.8571428571429" y1="72" y2="278"/><text class="muted num" x="312.8571428571429" y="294" text-anchor="middle">20 萬</text>
+  <line class="grid" x1="455.7142857142857" x2="455.7142857142857" y1="72" y2="278"/><text class="muted num" x="455.7142857142857" y="294" text-anchor="middle">40 萬</text>
+  <line class="grid" x1="598.5714285714286" x2="598.5714285714286" y1="72" y2="278"/><text class="muted num" x="598.5714285714286" y="294" text-anchor="middle">60 萬</text>
+  <text class="ink" x="158" y="101" text-anchor="end">146 則 · Claude</text>
+  <path class="s1" d="M170,78h369.57142857142856a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-369.57142857142856z"><title>146 則 · Claude · 壓縮前: 52.3 萬</title></path>
+  <text class="ink2 num" x="549.5714285714286" y="91">52.3 萬</text>
+  <path class="s2" d="M170,98h42.428571428571445a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-42.428571428571445z"><title>146 則 · Claude · 壓縮後: 6.5 萬</title></path>
+  <text class="ink2 num" x="222.42857142857144" y="111">6.5 萬</text>
+  <text class="ink" x="158" y="165" text-anchor="end">96 則 · Codex</text>
+  <path class="s1" d="M170,142h142.42857142857144a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-142.42857142857144z"><title>96 則 · Codex · 壓縮前: 20.5 萬</title></path>
+  <text class="ink2 num" x="322.42857142857144" y="155">20.5 萬</text>
+  <path class="s2" d="M170,162h17.428571428571416a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-17.428571428571416z"><title>96 則 · Codex · 壓縮後: 3 萬</title></path>
+  <text class="ink2 num" x="197.42857142857142" y="175">3 萬</text>
+  <text class="ink" x="158" y="229" text-anchor="end">40 則 · Claude</text>
+  <path class="s1" d="M170,206h462.42857142857133a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-462.42857142857133z"><title>40 則 · Claude · 壓縮前: 65.3 萬</title></path>
+  <text class="ink2 num" x="642.4285714285713" y="219">65.3 萬</text>
+  <path class="s2" d="M170,226h39.571428571428584a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-39.571428571428584z"><title>40 則 · Claude · 壓縮後: 6.1 萬</title></path>
+  <text class="ink2 num" x="219.57142857142858" y="239">6.1 萬</text>
+</svg>

@@ -79,6 +79,16 @@
     '選擇這個對話的工作資料夾': 'Choose the working folder for this chat',
     '最近': 'Recent',
     '開啟資料夾…': 'Open folder…',
+    // ---- 邊對話邊記索引（compress.js 的 noteAsk、頂列的壓縮確認） ----
+    '[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼，跟上一輪是同一件事就照抄「{prev}」。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]':
+      '[AgentDesk index: end your reply with one more line: {mark} topic｜outcome｜related files. Topic: a few words on what this turn was about; if it is the same matter as last turn, copy "{prev}" exactly. Outcome: what was settled (decisions, what changed, key numbers), or "TBD". Related files: file paths discussed, separated by "、", or "-". The user does not see this line.]',
+    '[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]':
+      '[AgentDesk index: end your reply with one more line: {mark} topic｜outcome｜related files. Topic: a few words on what this turn was about. Outcome: what was settled (decisions, what changed, key numbers), or "TBD". Related files: file paths discussed, separated by "、", or "-". The user does not see this line.]',
+    '第 #{from} 到 #{to} 段在對話時都記了索引，直接整理，不用請 Agent 寫，也不花額度。\n整理完後各 Agent 的 session 會清掉，之後每一輪只附索引與最近幾則原文；完整原文留在逐字稿。':
+      'Sections #{from}–#{to} were all indexed during the conversation, so AgentDesk will just tidy them up: no agent needed, no quota used.\nAfterwards every agent session is cleared, and each turn carries only the index and the latest few messages; the full text stays in the transcript.',
+    '其中有些段落對話時已經記了索引，{name} 只要補沒記到的段落（{n} 批）。':
+      'Some sections were already indexed during the conversation; {name} only fills in the rest ({n} part(s)).',
+    '{n} 筆是對話時記的': '{n} recorded during the conversation',
     // ---- 壓縮：開乾淨的 session 寫索引、索引的核對與補檔（compress.js、頂列） ----
     '{name} 會開新的 session 來寫，AgentDesk 直接把要寫的段落交給它，不接續原本的 session（原本的 session 沒看過全部的段落，或接續比重新讀還貴）。':
       '{name} will write it in a new session, with AgentDesk handing it the sections directly, instead of resuming its session (that session has not seen all the sections, or resuming would cost more than rereading).',
@@ -550,6 +560,15 @@
     "選擇這個對話的工作資料夾": "选择这个对话的工作文件夹",
     "最近": "最近",
     "開啟資料夾…": "打开文件夹…",
+    "[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼，跟上一輪是同一件事就照抄「{prev}」。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]":
+      "[AgentDesk 索引：回复的最后另起一行，写 {mark} 主题｜结论｜相关文件。主题用几个字讲这一轮在谈什么，跟上一轮是同一件事就照抄“{prev}”。结论写定下来的事（决定、改了哪里、关键数字），没有就写“未定”。相关文件写谈到的文件路径，用“、”分开，没有就写“-”。这一行用户看不到。]",
+    "[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]":
+      "[AgentDesk 索引：回复的最后另起一行，写 {mark} 主题｜结论｜相关文件。主题用几个字讲这一轮在谈什么。结论写定下来的事（决定、改了哪里、关键数字），没有就写“未定”。相关文件写谈到的文件路径，用“、”分开，没有就写“-”。这一行用户看不到。]",
+    "第 #{from} 到 #{to} 段在對話時都記了索引，直接整理，不用請 Agent 寫，也不花額度。\n整理完後各 Agent 的 session 會清掉，之後每一輪只附索引與最近幾則原文；完整原文留在逐字稿。":
+      "第 #{from} 到 #{to} 段在对话时都记了索引，直接整理，不用请 Agent 写，也不花额度。\n整理完后各 Agent 的 session 会清掉，之后每一轮只附索引与最近几条原文；完整原文留在逐字稿。",
+    "其中有些段落對話時已經記了索引，{name} 只要補沒記到的段落（{n} 批）。":
+      "其中有些段落对话时已经记了索引，{name} 只要补没记到的段落（{n} 批）。",
+    "{n} 筆是對話時記的": "{n} 条是对话时记的",
     "{name} 會開新的 session 來寫，AgentDesk 直接把要寫的段落交給它，不接續原本的 session（原本的 session 沒看過全部的段落，或接續比重新讀還貴）。":
       "{name} 会开新的 session 来写，AgentDesk 直接把要写的段落交给它，不接续原本的 session（原本的 session 没看过全部的段落，或接续比重新读还贵）。",
     "第 #{from} 到 #{to} 段的逐字稿原文附在最後（每則訊息一段，標題是「## #編號 誰 · 時間」），照這些內容寫，不用再讀檔。完整逐字稿在 {file}。":

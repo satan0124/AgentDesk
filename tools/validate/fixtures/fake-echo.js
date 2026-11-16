@@ -3,6 +3,8 @@
 let d = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', c => { d += c; }).on('end', async () => {
+  // 每輪最後附的「索引」要求先拿掉（這個假 Agent 不寫索引），最後一行才是使用者的話
+  d = d.replace(/\n*\[AgentDesk (?:索引|index)[^\n]*\s*$/, '');
   const lines = d.trim().split('\n');
   const last = lines.pop();
   const head = d.trim().split('\n')[0].slice(0, 12);

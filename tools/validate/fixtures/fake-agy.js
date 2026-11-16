@@ -7,6 +7,8 @@ process.stdin.on('data', c => { d += c; }).on('end', () => {
   const arg = f => (process.argv.includes(f) ? process.argv[process.argv.indexOf(f) + 1] : 'none');
   let content = '';
   try { content = JSON.parse(d.trim().split('\n')[0]).message.content; } catch { content = '(bad input)'; }
+  // 每輪最後附的「索引」要求先拿掉（這個假 Agent 不寫索引）
+  content = content.replace(/\n*\[AgentDesk (?:索引|index)[^\n]*\s*$/, '');
   const id = arg('--conversation') !== 'none' ? arg('--conversation') : 'conv-abc';
   ev({ event: 'init', conversation_id: id, init: { cwd: process.cwd(), tools: ['run_command'], permission_mode: 'always-proceed', model: arg('--model') } });
   // AgentDesk 請它寫索引（壓縮）：照格式回兩筆，前後各夾一行不合格式的話，看主程序挑不挑得出來。

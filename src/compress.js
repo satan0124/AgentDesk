@@ -4,6 +4,7 @@
 // 這裡只有純函式（給 Agent 的話、讀 Agent 寫回來的索引、之後每輪附的內容）；跑 Agent 與寫檔在 main.js。
 const path = require('path');
 const { budgetOf } = require('./context');
+const { NOTE, partsText } = require('./shared/reduce');
 
 const SEP = '｜';
 const KEEP = 4;          // 索引涵蓋的段落裡，最後幾則仍然附原文：剛壓縮完的那一輪才接得上話
@@ -38,6 +39,61 @@ function compressPrompt({ file, from, to, tr = same, state = false, text = '' })
     ] : []),
     ...(text ? ['', tr('[逐字稿 #{from}–#{to} 原文開始]', { from, to }), String(text).trim(), tr('[逐字稿原文結束。照前面的格式輸出。]')] : []),
   ].join('\n');
+}
+
+// ---------- 邊對話邊記 ----------
+// 每一輪請 Agent 在回覆最後另起一行寫這一輪的索引（它這時看得到整輪內容，不用事後重讀逐字稿）。
+// main.js 在回合結束時取出存到 assistant 訊息的 note，那一行從畫面與存檔拿掉（見 shared/reduce.js 的 stripMark）。
+// 壓縮時有 note 的段落直接用，只有沒記到的段落才請 Agent 寫。prev：上一輪的主題，同一件事照抄，之後才合得起來
+function noteAsk({ prev, tr = same } = {}) {
+  return prev
+    ? tr('[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼，跟上一輪是同一件事就照抄「{prev}」。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]', { mark: NOTE, prev })
+    : tr('[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]', { mark: NOTE });
+}
+// 從回覆裡取出那一行（有好幾行就用最後一行）：{ topic, result, files }，沒寫就是 null
+function parseNote(text) {
+  let got = null;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    // 只認行首的標記（同 shared/reduce.js 的 stripMark），內文提到標記的不算
+    const l = raw.replace(/^[ \t>*_`-]*/, '');
+    if (!l.startsWith(NOTE)) continue;
+    const f = l.slice(NOTE.length).replace(/^\s*[:：]?\s*/, '').replace(/[`*_\s]+$/, '').split(/\s*[｜|]\s*/).map(s => oneLine(s, FIELD_MAX));
+    if (f[0]) got = { topic: f[0], result: f[1] || '-', files: f.slice(2).filter(Boolean).join('、') || '-' };
+  }
+  return got;
+}
+const vague = s => !s || /^(-|未定|TBD|N\/A|none)$/i.test(String(s).trim());
+const topicKey = s => String(s || '').replace(/[\s「」“”"'`]/g, '').toLowerCase();
+const fileList = s => String(s || '').split(/\s*[、,，;；]\s*/).map(x => x.trim()).filter(x => x && x !== '-');
+// 第 from 到 to 段裡記下的索引（messages 是整個對話，編號 1 起）。一輪是使用者那則加上回覆那則；
+// 連續幾輪主題相同的合成一筆：範圍接起來、結論用最新的（最新的是「未定」就留前面的）、檔案合併
+function noteEntries(messages, from, to) {
+  const out = [];
+  for (let k = from; k <= to; k++) {
+    const m = messages[k - 1];
+    if (!m || m.role === 'user' || !m.note?.topic) continue;
+    const a = k > from && messages[k - 2]?.role === 'user' ? k - 1 : k;
+    const p = out[out.length - 1];
+    if (p && p.to + 1 === a && topicKey(p.topic) === topicKey(m.note.topic)) {
+      p.to = k;
+      if (!vague(m.note.result)) p.result = m.note.result;
+      const files = [...new Set([...fileList(p.files), ...fileList(m.note.files)])];
+      p.files = files.length ? files.join('、') : '-';
+    } else out.push({ from: a, to: k, topic: m.note.topic, result: m.note.result || '-', files: m.note.files || '-' });
+  }
+  return out;
+}
+// 第 from 到 to 段裡還要請 Agent 寫的範圍：沒被 entries 涵蓋、而且裡面有 Agent 回覆文字的（只有出錯或停掉的回合，補佔位就好）
+function noteHoles(messages, entries, from, to) {
+  const out = [];
+  let next = from;
+  const add = (a, b) => { if (messages.slice(a - 1, b).some(m => m.role !== 'user' && partsText(m.parts).trim())) out.push([a, b]); };
+  for (const e of [...entries].sort((x, y) => x.from - y.from)) {
+    if (e.from > next) add(next, e.from - 1);
+    next = Math.max(next, e.to + 1);
+  }
+  if (next <= to) add(next, to);
+  return out;
 }
 
 // 段落太多時切成幾批：lengths 是第 from 段起每一段的字數，每批加起來不超過 max（單一段超過就自己一批）。回傳 [[起, 迄], …]
@@ -129,11 +185,12 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const mentions = (text, name) => new RegExp(`(^|[^\\w.-])${esc(name)}(?![\\w-])`, 'i').test(text);
 
 // 核對並補完 Agent 寫回來的索引（不花額度）：
-// - 相關檔案：Agent 寫的逐個查，檔名沒出現在那幾段逐字稿裡的拿掉（摘要會編造路徑）；
+// - 相關檔案：Agent 寫的逐個查，檔名沒出現在那幾段逐字稿裡、工作資料夾裡也沒有的拿掉（摘要會編造路徑）；
 //   改過的檔以動作記錄為準排在前面，Agent 寫的補在後面（同檔名的不重複）。
 // - 範圍：照起點排好；中間漏掉的段落補一筆「沒有索引」的佔位（列出那幾段改過的檔），重疊的只計數。數字與結論不查（比對不準）。
 // segText(a, b)：第 a 到 b 段的逐字稿文字；edited(a, b)：第 a 到 b 段改過的檔
-function verifyIndex(entries, { from, to, segText, edited, tr = same }) {
+// exists(f)：f 在工作資料夾裡真的有（有的就留，例如 Agent 當輪讀過、回覆裡只寫了「三種語言」沒寫檔名）
+function verifyIndex(entries, { from, to, segText, edited, tr = same, exists = () => false }) {
   let dropped = 0, overlaps = 0;
   const gaps = [];
   const fix = e => {
@@ -145,7 +202,7 @@ function verifyIndex(entries, { from, to, segText, edited, tr = same }) {
       const f = raw.trim().replace(/^`+|`+$/g, '');
       if (!f || f === '-') continue;
       const name = baseName(f);
-      if (!name || !(text.toLowerCase().includes(f.toLowerCase()) || mentions(text, name))) { dropped++; continue; }
+      if (!name || !(text.toLowerCase().includes(f.toLowerCase()) || mentions(text, name) || exists(f))) { dropped++; continue; }
       if (!names.has(name.toLowerCase())) { names.add(name.toLowerCase()); extra.push(f); }
     }
     return { ...e, files: fileField([...mech, ...extra], tr) };
@@ -226,4 +283,4 @@ function indexContext({ lines, file, index, level, tr = same, state }) {
   ].join('\n');
 }
 
-module.exports = { KEEP, FRESH_BASE, CHUNK_MAX, compressPrompt, chunkRanges, parseState, resumeForIndex, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext };
+module.exports = { KEEP, FRESH_BASE, CHUNK_MAX, compressPrompt, noteAsk, parseNote, noteEntries, noteHoles, chunkRanges, parseState, resumeForIndex, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext };

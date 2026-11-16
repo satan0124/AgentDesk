@@ -624,6 +624,44 @@ async function unitTests() {
     assert(!CJK.test(en) && JSON.stringify(parseState('Current state: n\nNext steps: x')) === JSON.stringify({ now: 'n', next: 'x' }), en.split('\n').find(l => CJK.test(l)) || 'parseState en');
   });
 
+  await check('邊對話邊記索引：要求、取出、畫面拿掉、同主題合併、只補沒記到的', () => {
+    const { noteAsk, parseNote, noteEntries, noteHoles } = require(path.join(SRC, 'compress.js'));
+    const { stripMark, NOTE } = require(path.join(SRC, 'shared', 'reduce.js'));
+    // 要求：有上一輪主題才請它照抄
+    assert(noteAsk().includes(NOTE) && !noteAsk().includes('照抄') && noteAsk({ prev: '登入' }).includes('照抄「登入」'), noteAsk({ prev: '登入' }));
+    // 取出：最後一行為準，前面的粗體、冒號、半形直線都收；沒有就是 null
+    const reply = `改好了。\n\n${NOTE} 舊的｜x｜-\n**${NOTE}：登入錯誤 | 改成往上拋 | src/api.js、src/login.js**`;
+    assert(JSON.stringify(parseNote(reply)) === JSON.stringify({ topic: '登入錯誤', result: '改成往上拋', files: 'src/api.js、src/login.js' }) && parseNote('沒有') === null
+      && JSON.stringify(parseNote(`${NOTE} 只有主題`)) === JSON.stringify({ topic: '只有主題', result: '-', files: '-' }), JSON.stringify(parseNote(reply)));
+    // 畫面與存檔拿掉那一行（前面的文字留著）；串流到一半的標記先藏
+    // 內文提到標記（例如解釋程式碼）不算索引行：不拿掉、也不取出（真的 Codex 這樣回過，整行後半被吃掉）
+    const inline = `它會移除 \`${NOTE}\` 那一行。`;
+    assert(stripMark(reply) === '改好了。' && stripMark(`a\n[[agentdesk:in`, true) === 'a\n' && stripMark(inline) === inline && parseNote(inline) === null
+      && stripMark(`x\n- ${NOTE} t｜r｜-\ny`) === 'x\ny', JSON.stringify(stripMark(reply)));
+    // 核對相關檔案：逐字稿沒寫檔名、但工作資料夾裡真的有的留著（Agent 當輪看過，回覆只寫「三種語言」）
+    const { verifyIndex } = require(path.join(SRC, 'compress.js'));
+    const vf = exists => verifyIndex([{ from: 1, to: 2, topic: 't', result: 'r', files: 'README.zh-TW.md、ghost.md' }], { from: 1, to: 2, segText: () => '三種語言', edited: () => [], exists });
+    assert(vf(f => f === 'README.zh-TW.md').entries[0].files === 'README.zh-TW.md' && vf(f => f === 'README.zh-TW.md').dropped === 1 && vf().entries[0].files === '-', JSON.stringify(vf(f => f === 'README.zh-TW.md')));
+    // 合併：主題相同（空白、引號、大小寫不計）又相鄰的一筆；結論用最新的，最新的是「未定」就留前面的；檔案合併
+    const u = text => ({ role: 'user', text }), a = (note, text = 'ok') => ({ role: 'assistant', parts: [{ kind: 'text', text }], ...(note ? { note } : {}) });
+    const msgs = [u('1'), a({ topic: 'Login', result: 'r1', files: 'a.js' }), u('2'), a({ topic: '「login」', result: '未定', files: 'a.js、b.js' }),
+      u('3'), a(null), u('4'), a({ topic: 'Docs', result: 'r4', files: '-' }), u('5'), { role: 'assistant', parts: [], status: 'error' }];
+    const e = noteEntries(msgs, 1, 10);
+    assert(JSON.stringify(e) === JSON.stringify([{ from: 1, to: 4, topic: 'Login', result: 'r1', files: 'a.js、b.js' }, { from: 7, to: 8, topic: 'Docs', result: 'r4', files: '-' }]), JSON.stringify(e));
+    // 從中間開始時，回覆前面那則使用者的話已經在索引裡 → 這筆只涵蓋回覆那一則
+    assert(JSON.stringify(noteEntries(msgs, 2, 4).map(x => [x.from, x.to])) === '[[2,4]]', JSON.stringify(noteEntries(msgs, 2, 4)));
+    // 沒記到的：#5–#6 有回覆文字要請 Agent 寫；#9–#10 只有出錯、沒有文字的回合，補佔位就好
+    assert(JSON.stringify(noteHoles(msgs, e, 1, 10)) === '[[5,6]]' && JSON.stringify(noteHoles(msgs, [], 1, 4)) === '[[1,4]]', JSON.stringify(noteHoles(msgs, e, 1, 10)));
+    const { t, setLang } = require(path.join(SRC, 'shared', 'i18n.js'));
+    setLang('en'); const en = noteAsk({ prev: 'Login', tr: t }) + noteAsk({ tr: t }); setLang('zh-CN'); const cn = noteAsk({ prev: '登录', tr: t }); setLang('zh-TW');
+    assert(!CJK.test(en) && en.includes('copy "Login"') && en.includes(NOTE) && cn.includes('照抄“登录”') && cn.includes('用户看不到'), en + '\n' + cn);
+    // 主程序：每輪附要求、回合結束時取出存到訊息上（在 status 事件拿掉那一行之前）
+    const main = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+    const turn = main.slice(main.indexOf('async function startTurn('), main.indexOf('// Claude 經 MCP 委派過來'));
+    const at = s => turn.indexOf(s);
+    assert(/noteAsk\(\{ prev: history\.findLast/.test(turn) && at('msg.note = note') > 0 && at('msg.note = note') < at("type: 'status'"), 'startTurn 沒有附要求或取出索引行');
+  });
+
   await check('「極度節省 token」規則：文字、放在哪、同一個 session 只附一次', () => {
     const { frugalNote, frugalPlace } = require(path.join(SRC, 'mode.js'));
     const { t, setLang } = require(path.join(SRC, 'shared', 'i18n.js'));
@@ -914,6 +952,11 @@ async function e2eTests() {
   await check('畫面：沒有進程檔的對話壓縮時多記現況與下一步，下一輪接在索引後面；有進程檔的不記', () => {
     const s = r.state || {};
     assert(s.workNone && s.saved && s.next, JSON.stringify(s));
+  });
+  await check('畫面：邊對話邊記索引（存在訊息上、那一行不顯示、帶上一輪主題）；壓縮只補沒記到的，全記到就不跑 Agent', () => {
+    const s = r.notes || {};
+    assert(s.saved && s.stripped && s.prev && s.echoNone && s.info && s.res && s.all && s.allAsk && s.cjk === false, JSON.stringify(s));
+    return s.summary;
   });
   await check('畫面：工作模式完成一項任務、session 偏大時提示重開（第一次只記、小 session 不提示、按了清掉 session）', () => {
     const k = r.taskTip || {};

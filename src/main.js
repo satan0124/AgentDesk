@@ -11,7 +11,7 @@ const { buildContext, delegateReply } = require('./context');
 const { MODES, modeOf, modeNotes, delegateTail, frugalNote, frugalPlace, needWork, stickyReadOnly, mustRestart } = require('./mode');
 const { DIR: WORK_DIR, makeWork, workPath, template, parseWork, workFromFile } = require('./work');
 const { transcript, entry } = require('./transcript');
-const { KEEP, compressPrompt, parseState, resumeForIndex, chunkRanges, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext } = require('./compress');
+const { KEEP, compressPrompt, noteAsk, parseNote, noteEntries, noteHoles, parseState, resumeForIndex, chunkRanges, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext } = require('./compress');
 const i18n = require('./shared/i18n');
 const tr = i18n.t;
 const { applyEvent, partsText } = require('./shared/reduce');
@@ -411,7 +411,9 @@ async function startTurn(convId, agent, text, attachments = []) {
   if (ctxChars) emitTo(conv, msg, { type: 'context', chars: ctxChars });
   const notes = notesFor(conv, agent);
   if (agent === 'claude') try { fs.mkdirSync(trDir(convId), { recursive: true }); } catch {}
-  const opts = { prompt: notes.prefix ? `${notes.prefix}\n\n${prompt}` : prompt, cwd: conv.cwd, sessionId: conv.sessions[agent],
+  // 邊對話邊記索引：請它在回覆最後另起一行寫這一輪的索引（見 compress.js 的 noteAsk），附上上一輪的主題好讓同一件事用同一個主題
+  const ask = noteAsk({ prev: history.findLast(m => m.note?.topic)?.note.topic, tr });
+  const opts = { prompt: `${notes.prefix ? `${notes.prefix}\n\n` : ''}${prompt}\n\n${ask}`, cwd: conv.cwd, sessionId: conv.sessions[agent],
     images: atts.filter(a => a.kind === 'image').map(a => a.path),
     // 逐字稿資料夾在工作資料夾外面，要另外開讀取權（Claude 的 --add-dir）：壓縮過的對話要讀逐字稿與索引；
     // Claude 每一輪都開，委派回覆太長時完整內容存在那裡（見 saveDelegate），委派是在這一輪中途發生的
@@ -444,6 +446,9 @@ async function startTurn(convId, agent, text, attachments = []) {
   if (freshSession && conv.sessions[agent]) conv.seen = { ...(conv.seen || {}), [agent]: seen };
   sendMeta(conv);
   if (r.text && !msg.parts.some(p => p.kind === 'text')) emitTo(conv, msg, { type: 'text', text: r.text });
+  // 取出這一輪的索引行存到訊息上（那一行在下面的 status 事件裡從文字拿掉）
+  const note = parseNote(msg.parts.filter(p => p.kind === 'text').map(p => p.text).join('\n'));
+  if (note) msg.note = note;
   // 對話模式：Agent 想改檔卻做不了（Claude 的拒絕記錄，或回覆裡約定的標記）→ 畫面出現「切到工作模式並繼續」
   const need = !r.error && modeOf(conv) === 'chat'
     ? needWork({ text: partsText(msg.parts), denials: r.denials, permission: settings.agents[agent]?.permission }) : null;
@@ -511,14 +516,19 @@ function compressPlan(conv, agent) {
   const from = (had?.upto || 0) + 1, to = conv.messages.length;
   const segs = conv.messages.slice(from - 1, to).map((m, i) => entry(m, from + i, { label: labelOf, tr }));
   const segText = (a, b) => segs.slice(a - from, b - from + 1).join('\n\n');
-  const chars = segs.reduce((s, x) => s + x.length + 2, 0);
-  const resume = !!conv.sessions[agent] && resumeForIndex({ tokens: conv.sizes?.[agent]?.tokens, chars, seen: conv.seen?.[agent], from });
+  const lens = segs.map(x => x.length + 2);
+  const chars = lens.reduce((s, n) => s + n, 0);
+  // 對話時記下的索引直接用，只有沒記到的段落才請 agent 寫
+  const notes = noteEntries(conv.messages, from, to);
+  const holes = noteHoles(conv.messages, notes, from, to);
+  const resume = !notes.length && !!conv.sessions[agent] && resumeForIndex({ tokens: conv.sizes?.[agent]?.tokens, chars, seen: conv.seen?.[agent], from });
   // 開乾淨的 session 時，段落原文直接放進 prompt；太長就分批，每批各開一個
-  const parts = resume ? [[from, to]] : chunkRanges(segs.map(x => x.length + 2), from);
-  return { had, from, to, segText, resume, parts };
+  const parts = resume ? [[from, to]] : holes.flatMap(([a, b]) => chunkRanges(lens.slice(a - from, b - from + 1), a));
+  return { had, from, to, segText, resume, parts, notes };
 }
 // 請 agent 替「還沒進索引的段落」寫索引（給它的話與格式見 compress.js）。
-// 它原本的 session 看過全部要寫的段落、又不比重讀便宜太多時，接續原本的 session（一個請求就寫完）；
+// 對話時每輪記下的索引（訊息的 note）直接用，只有沒記到的段落才請 agent 寫；全都記到了就不用跑 agent。
+// 整段都沒記到時，它原本的 session 看過全部要寫的段落、又不比重讀便宜太多時，接續原本的 session（一個請求就寫完）；
 // 否則開乾淨的 session，把段落原文直接放進 prompt（不用它分段讀檔，每讀一段就重送一次前面的內容），太長分批。
 // 寫回來的索引由 AgentDesk 核對（逐字稿裡沒出現的檔案拿掉、漏掉的段落補佔位）並補上改過的檔，
 // 再追加到索引檔、清掉各 Agent 的 session，之後每一輪改附「索引＋最近幾則原文」。
@@ -529,7 +539,7 @@ async function compress(convId, agent) {
   if (running.has(convId)) return { error: tr('這個對話還在執行中') };
   if (!fs.existsSync(conv.cwd)) return { error: tr('工作資料夾不存在：{cwd}', { cwd: conv.cwd }) };
   if (!settings.agents[agent]?.enabled) return { error: tr('{name} 還沒加入，請到設定加入', { name: labelOf(agent) }) };
-  const { had, from, to, segText, resume, parts } = compressPlan(conv, agent);
+  const { had, from, to, segText, resume, parts, notes } = compressPlan(conv, agent);
   if (to < from) return { error: tr('沒有還沒寫進索引的內容') };
   writeTranscript(conv);
   if (!fs.existsSync(transcriptFile(convId))) return { error: tr('逐字稿寫不進去：{file}', { file: transcriptFile(convId) }) };
@@ -567,8 +577,9 @@ async function compress(convId, agent) {
     error = r.error || (got.length ? '' : tr('{name} 沒有照格式寫出索引，這次沒有壓縮。可以再試一次，或換一個 Agent。', { name: labelOf(agent) }));
     parsed.push(...got);
   }
-  const uniq = parsed.filter((e, i, all) => all.findIndex(x => indexLine(x) === indexLine(e)) === i);
-  const checked = verifyIndex(uniq, { from, to, segText, edited: (a, b) => editedFiles(conv.messages.slice(a - 1, b), conv.cwd), tr });
+  const uniq = [...notes, ...parsed.filter((e, i, all) => all.findIndex(x => indexLine(x) === indexLine(e)) === i)];
+  const exists = f => { try { return !path.isAbsolute(f) && fs.statSync(path.resolve(conv.cwd, f)).isFile(); } catch { return false; } };
+  const checked = verifyIndex(uniq, { from, to, segText, edited: (a, b) => editedFiles(conv.messages.slice(a - 1, b), conv.cwd), tr, exists });
   const entries = checked.entries;
   if (!error) {
     try {
@@ -585,7 +596,7 @@ async function compress(convId, agent) {
   if (convs.get(convId) === conv) saveConv(conv, false);   // 壓縮途中對話被刪掉就不要再存回去
   sendMeta(conv);
   send('conv:changed', listConvs());
-  return error ? { error } : { from, to, added: entries.length, resumed: resume, parts: parts.length, dropped: checked.dropped, gaps: checked.gaps, overlaps: checked.overlaps };
+  return error ? { error } : { from, to, added: entries.length, noted: notes.length, resumed: resume, parts: parts.length, dropped: checked.dropped, gaps: checked.gaps, overlaps: checked.overlaps };
 }
 
 function startServer() {
@@ -701,7 +712,7 @@ ipcMain.handle('compress:info', (_, id, agent) => {
   if (!c) return null;
   const idx = indexOf(c);
   return { transcript: transcriptFile(id), index: indexFile(id), upto: idx?.upto || 0, lines: idx?.lines.length || 0,
-    ...(agent ? { resume: compressPlan(c, agent).resume } : {}) };
+    ...(agent ? (p => ({ resume: p.resume, parts: p.parts.length, noted: p.notes.length }))(compressPlan(c, agent)) : {}) };
 });
 ipcMain.handle('att:add', (_, items) => addAttachments(items || []));
 ipcMain.handle('chat:send', (_, convId, agent, text, atts) => {

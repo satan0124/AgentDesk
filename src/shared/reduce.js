@@ -45,11 +45,16 @@
   // 對話模式（唯讀）下，Agent 需要改檔時在回覆最後另起一行寫這個標記（見 mode.js 的說明）；
   // 主程序據此讓畫面出現切換按鈕，標記本身不顯示、也不留在存檔裡。
   const MARK = '[[agentdesk:work]]';
+  // 每輪回覆最後那一行索引（邊對話邊記，見 compress.js 的 noteAsk）：主程序在回合結束時取出存到訊息上，這一行同樣不顯示、不留在存檔裡
+  const NOTE = '[[agentdesk:index]]';
+  // 只認行首的標記（前面可以有空白、條列、粗體）：回覆內文提到這個標記（例如解釋程式碼時）不能被當成索引行拿掉
+  const NOTE_LINE = /^[ \t>*_`-]*\[\[agentdesk:index\]\][^\n]*\n?/gm;
   // live：還在串流時，連結尾「打到一半的標記」也先藏起來，免得閃一下
   function stripMark(text, live) {
     let s = String(text || '');
+    if (s.includes(NOTE)) s = s.replace(NOTE_LINE, '').replace(/\s+$/, '');
     if (s.includes(MARK)) return s.split(MARK).join('').replace(/\s+$/, '');
-    if (live) for (let n = MARK.length - 1; n >= 2; n--) if (s.endsWith(MARK.slice(0, n))) return s.slice(0, -n);
+    if (live) for (const k of [MARK, NOTE]) for (let n = k.length - 1; n >= 2; n--) if (s.endsWith(k.slice(0, n))) return s.slice(0, -n);
     return s;
   }
   function cleanMark(parts) {
@@ -63,7 +68,7 @@
     return (parts || []).map(p => (p.kind === 'text' ? p.text : p.kind === 'delegate' ? partsText(p.parts) : '')).join('\n');
   }
 
-  const api = { applyEvent, MARK, stripMark, partsText };
+  const api = { applyEvent, MARK, NOTE, stripMark, partsText };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Reduce = api;
 })(this);

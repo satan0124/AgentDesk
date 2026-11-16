@@ -495,6 +495,41 @@
   for (let i = 0; i < 20; i++) { await wait(150); tipC = await api.getConv(mid); if (!Object.keys(tipC.sessions || {}).length) break; }
   flush();
   out.taskTip.reset = !Object.keys(tipC.sessions || {}).length && tip.classList.contains('hidden');
+  // 7g) 邊對話邊記索引：使用者的話有「note X」時，假 Claude 在回覆最後一行寫索引（主題 topic-X）。
+  //     存在訊息的 note 上，那一行畫面與存檔都不留；下一輪的要求帶著上一輪的主題（假 Claude 回報 prev=）。
+  //     壓縮時記到的直接用（主題相同、相鄰的合成一筆），只請 Agent 補沒記到的（xecho 那一輪）；全都記到了就不跑 Agent
+  const msgTextOf = m => (m?.parts || []).filter(p => p.kind === 'text').map(p => p.text).join('');
+  const nc = await api.createConv(current.cwd);
+  for (const [k, [a, s]] of [['xcc', 'note A one'], ['xcc', 'note A two'], ['xcc', 'note B'], ['xecho', 'plain turn']].entries()) {
+    await api.send(nc.id, a, s);
+    await waitTurn(nc.id, (k + 1) * 2);
+  }
+  const nn1 = await api.getConv(nc.id);
+  const ncc = nn1.messages.filter(m => m.role === 'assistant' && m.agent === 'xcc');
+  await openConv(nc.id);
+  out.notes = { saved: ncc.map(m => m.note?.topic).join() === 'topic-A,topic-A,topic-B' && ncc[0].note.result === 'result A',
+    stripped: !JSON.stringify(nn1.messages).includes('[[agentdesk:index]]') && !document.querySelector('#messages').innerText.includes('agentdesk:index'),
+    prev: ['none', 'topic-A', 'topic-A'].every((p, i) => msgTextOf(ncc[i]).includes(`prev=${p}`)), echoNone: !nn1.messages.at(-1).note };
+  const ninfo = await api.compressInfo(nc.id, 'xcc');
+  out.notes.info = ninfo?.parts === 1 && ninfo.noted === 2 && ninfo.resume === false;
+  const nres = await api.compress(nc.id, 'xcc');
+  out.notes.res = !nres?.error && nres.noted === 2 && nres.parts === 1 && nres.added === 4 && JSON.stringify(nres.gaps) === '[[8,8]]'
+    && (await api.compressInfo(nc.id)).lines === 4;
+  out.notes.summary = compressSummary(nres);
+  // 全都記到了：不用請 Agent，確認視窗講明不花額度
+  const nc2 = await api.createConv(current.cwd);
+  await api.send(nc2.id, 'xcc', 'note C one'); await waitTurn(nc2.id, 2);
+  await api.send(nc2.id, 'xcc', 'note C two'); await waitTurn(nc2.id, 4);
+  await openConv(nc2.id);
+  const ninfo2 = await api.compressInfo(nc2.id, 'xcc');
+  asked = '';
+  await compressWith('xcc');
+  const nn2 = await api.getConv(nc2.id);
+  out.notes.all = ninfo2?.parts === 0 && ninfo2.noted === 1 && nn2.indexed === 4 && !Object.keys(nn2.sessions).length && (await api.compressInfo(nc2.id)).lines === 1;
+  out.notes.allAsk = asked.includes('#1') && asked.includes('#4') && !asked.includes('CC');
+  out.notes.cjk = CJK.test(asked + out.notes.summary);
+  await openConv(mid);
+  await api.deleteConv(nc.id); await api.deleteConv(nc2.id);
   // 8) 逐字稿：validate.js 依對話 id 讀主程序寫的檔，段數要等於訊息數；
   //    第二次啟動時帶入 window.__DELETE（第一次的對話），刪掉後它的逐字稿要跟著不見
   out.transcript = { id: mid, count: (await api.getConv(mid)).messages.length };
