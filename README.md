@@ -95,7 +95,7 @@ Method, all numbers and caveats: [benchmarks](guide/benchmarks.md).
 
 ## Safety and privacy
 
-- **Chat mode is not a sandbox.** It tells agents not to change files and uses each CLI's read-only option where one exists. Rules you allowed in Claude Code (`permissions.allow`) still apply, and custom agents only get an instruction.
+- **Chat mode is not a sandbox.** It tells agents not to change files and uses each CLI's read-only option where one exists. Claude's editing tools are turned off, but Bash commands and MCP tools you allowed in Claude Code (`permissions.allow`) still run, and custom agents only get an instruction.
 - **Work mode can change things.** Agents read and write files and run commands in the chat's working folder. Use it only in folders you trust, and check the defaults in Settings.
 - **Where data goes.** Chats, transcripts and settings stay in `%APPDATA%\AgentDesk\` on your machine, and AgentDesk runs no server of its own. Each CLI still sends your prompts to its own provider.
 

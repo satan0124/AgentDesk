@@ -95,7 +95,7 @@ git clone https://github.com/satan0124/AgentDesk.git
 
 ## 安全与隐私
 
-- **对话模式不是沙盒。** 它会交代 Agent 不要改文件，CLI 有只读设置的也会用上。但你自己在 Claude Code 允许的规则（`permissions.allow`）照样放行，自定义 Agent 也只收到文字说明。
+- **对话模式不是沙盒。** 它会交代 Agent 不要改文件，CLI 有只读设置的也会用上。Claude 改文件的工具会停用，但你自己在 Claude Code 允许的 Bash 命令和 MCP 工具（`permissions.allow`）照样能用，自定义 Agent 也只收到文字说明。
 - **工作模式会动到东西。** Agent 会在对话的工作文件夹里读写文件、运行命令。请只在你信任的文件夹使用，默认权限可在设置调整。
 - **数据去哪里。** 对话、逐字稿和设置都存在本机的 `%APPDATA%\AgentDesk\`，AgentDesk 没有自己的服务器。各 CLI 仍会把 prompt 发到各自的服务商。
 

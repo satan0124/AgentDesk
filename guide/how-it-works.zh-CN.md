@@ -12,12 +12,12 @@
 
 | Agent | 对话模式 | 工作模式默认 |
 |---|---|---|
-| Claude Code | `--permission-mode default` | 自动接受文件修改 |
+| Claude Code | `--permission-mode default`，并停用改文件的工具（`--disallowedTools`） | 自动接受文件修改 |
 | Codex CLI | 只读 sandbox | 可写工作文件夹 |
 | Cursor Agent CLI | `--mode ask` | 自动运行命令（`--force`） |
 | 自定义 Agent | 只在 prompt 里交代 | 按设置 |
 
-这不是沙盒。你自己在 Claude Code 设置里允许的规则（`permissions.allow`）照样放行，自定义 Agent 也可能不照做。
+这不是沙盒。Claude 改文件的工具（Edit、Write、MultiEdit、NotebookEdit）就算你在 `permissions.allow` 允许过也会停用；但你允许过的 Bash 命令和 MCP 工具照样能用，它们也可能改到文件。自定义 Agent 也可能不照做。
 
 对话模式下 Agent 需要改文件时，会先说明要改什么，消息下方出现“切换到工作模式并继续”。点了就切换模式，由同一个 Agent 接着做。
 

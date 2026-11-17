@@ -12,12 +12,12 @@
 
 | Agent | 對話模式 | 工作模式預設 |
 |---|---|---|
-| Claude Code | `--permission-mode default` | 自動接受改檔 |
+| Claude Code | `--permission-mode default`，並停用改檔工具（`--disallowedTools`） | 自動接受改檔 |
 | Codex CLI | 唯讀 sandbox | 可寫工作資料夾 |
 | Cursor Agent CLI | `--mode ask` | 自動執行指令（`--force`） |
 | 自訂 Agent | 只在 prompt 裡交代 | 照設定 |
 
-這不是沙盒。你自己在 Claude Code 設定裡允許的規則（`permissions.allow`）照樣放行，自訂 Agent 也可能不照做。
+這不是沙盒。Claude 的改檔工具（Edit、Write、MultiEdit、NotebookEdit）就算你在 `permissions.allow` 允許過也會停用；但你允許過的 Bash 指令和 MCP 工具照樣能用，它們也可能改到檔案。自訂 Agent 也可能不照做。
 
 對話模式下 Agent 需要改檔時，會先說明要改什麼，訊息下方出現「切到工作模式並繼續」。按了就切換模式，由同一個 Agent 接著做。
 

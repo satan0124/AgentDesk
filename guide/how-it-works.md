@@ -12,12 +12,12 @@ In chat mode AgentDesk tells every agent not to change files and uses each CLI's
 
 | Agent | Chat mode | Work mode default |
 |---|---|---|
-| Claude Code | `--permission-mode default` | accept edits automatically |
+| Claude Code | `--permission-mode default`, editing tools turned off (`--disallowedTools`) | accept edits automatically |
 | Codex CLI | read-only sandbox | may write in the working folder |
 | Cursor Agent CLI | `--mode ask` | run commands automatically (`--force`) |
 | Custom agents | instruction in the prompt only | as configured |
 
-This is not a sandbox. Rules you allowed yourself in Claude Code (`permissions.allow`) still apply, and a custom agent can ignore the instruction.
+This is not a sandbox. Claude's editing tools (Edit, Write, MultiEdit, NotebookEdit) stay off even if you allowed them in `permissions.allow`, but Bash commands and MCP tools you allowed still run, and they can change files. A custom agent can ignore the instruction.
 
 When an agent needs to change a file in chat mode, it explains what it would change and **Switch to work mode and continue** appears under the reply. Clicking it switches the chat and lets the same agent carry on.
 

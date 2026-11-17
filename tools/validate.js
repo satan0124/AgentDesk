@@ -346,7 +346,9 @@ async function unitTests() {
     const cl = p => buildCommand('claude', { cli: nodeExe, permission: p.permission, readOnly: p.readOnly }, { prompt: 'p', cwd }).args;
     assert(after(cl({ permission: 'bypassPermissions', readOnly: true }), '--permission-mode') === 'default', `claude 唯讀：${cl({ permission: 'bypassPermissions', readOnly: true }).join(' ')}`);
     assert(after(cl({ permission: 'plan', readOnly: true }), '--permission-mode') === 'plan', 'claude plan 應維持');
-    assert(after(cl({ permission: 'bypassPermissions' }), '--permission-mode') === 'bypassPermissions', 'claude 工作模式應照設定');
+    // 改檔工具用 deny 規則停用（比使用者的 permissions.allow 優先）；工作模式不停用
+    assert(after(cl({ permission: 'bypassPermissions', readOnly: true }), '--disallowedTools') === 'Edit,Write,MultiEdit,NotebookEdit', 'claude 唯讀應停用改檔工具');
+    assert(!cl({ permission: 'bypassPermissions' }).includes('--disallowedTools'), 'claude 工作模式不應停用改檔工具');
     // Codex：sandbox 一律 read-only
     const cx = c => buildCommand('codex', { cli: nodeExe, ...c }, { prompt: 'p', cwd }).args.join(' ');
     assert(cx({ sandbox: 'danger-full-access', readOnly: true }).includes('sandbox_mode="read-only"'), `codex 唯讀：${cx({ sandbox: 'danger-full-access', readOnly: true })}`);

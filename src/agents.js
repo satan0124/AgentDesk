@@ -6,6 +6,8 @@ const { t: tr } = require('./shared/i18n');
 const { resolveCli, killTree } = require('./cli');
 
 const LABEL = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' };
+// 對話模式停用的 Claude 改檔工具（一個參數、逗號分隔，避免後面的參數被當成工具名稱）；同 mode.js 的 EDIT_TOOLS
+const CLAUDE_EDIT_TOOLS = 'Edit,Write,MultiEdit,NotebookEdit';
 const labelOf = (agent, cfg) => cfg?.name || LABEL[agent] || agent;
 const stripAnsi = s => String(s || '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/\r(?!\n)/g, '');
 
@@ -51,12 +53,15 @@ function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, 
     return { file: base[0], args: [...base.slice(1), ...args], cwd, stdin: prompt };
   }
   // cfg.readOnly（對話模式）：不管設定頁選什麼權限，一律換成各 CLI 的唯讀做法。
-  //   Claude：--permission-mode default，-p 沒有人能回答詢問，改檔與非唯讀指令會被拒（列在 result 的 permission_denials）
+  //   Claude：--permission-mode default，-p 沒有人能回答詢問，改檔與非唯讀指令會被拒（列在 result 的 permission_denials）；
+  //     另外用 --disallowedTools 停用改檔工具：deny 規則比 permissions.allow 優先，使用者自己允許過 Edit／Write 也擋得住。
+  //     使用者允許過的 Bash 指令與 MCP 工具擋不了（擋掉 Bash 會連唯讀指令一起擋）
   //   Codex：sandbox_mode="read-only"；Cursor：拿掉 --force，改 --mode ask（設定是 plan 就維持 plan，同樣唯讀）
   //   自訂 Agent 沒有共通旗標，上面已經 return，只能靠 prompt 裡的說明（mode.js）
   if (agent === 'claude') {
     args.push('-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--permission-mode', cfg.readOnly ? (cfg.permission === 'plan' ? 'plan' : 'default') : cfg.permission || 'acceptEdits');
+    if (cfg.readOnly) args.push('--disallowedTools', CLAUDE_EDIT_TOOLS);
     if (addDirs.length) args.push('--add-dir', ...addDirs);
     if (cfg.model) args.push('--model', cfg.model);
     if (cfg.effort) args.push('--effort', cfg.effort);
