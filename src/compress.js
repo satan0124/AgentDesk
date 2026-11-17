@@ -47,19 +47,23 @@ function compressPrompt({ file, from, to, tr = same, state = false, text = '' })
 // 壓縮時有 note 的段落直接用，只有沒記到的段落才請 Agent 寫。prev：上一輪的主題，同一件事照抄，之後才合得起來
 function noteAsk({ prev, tr = same } = {}) {
   return prev
-    ? tr('[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼，跟上一輪是同一件事就照抄「{prev}」。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]', { mark: NOTE, prev })
-    : tr('[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]', { mark: NOTE });
+    ? tr('[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼，跟上一輪是同一件事就照抄「{prev}」。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。只是簡短回應（回覆只有幾句、沒有新的決定、沒有用工具）時可以不寫。這一行使用者看不到。]', { mark: NOTE, prev })
+    : tr('[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。只是簡短回應（回覆只有幾句、沒有新的決定、沒有用工具）時可以不寫。這一行使用者看不到。]', { mark: NOTE });
 }
 // 從回覆裡取出那一行（有好幾行就用最後一行）：{ topic, result, files }，沒寫就是 null
 function parseNote(text) {
   let got = null;
-  for (const raw of String(text || '').split(/\r?\n/)) {
+  const lines = String(text || '').split(/\r?\n/);
+  lines.forEach((raw, i) => {
     // 只認行首的標記（同 shared/reduce.js 的 stripMark），內文提到標記的不算
     const l = raw.replace(/^[ \t>*_`-]*/, '');
-    if (!l.startsWith(NOTE)) continue;
-    const f = l.slice(NOTE.length).replace(/^\s*[:：]?\s*/, '').replace(/[`*_\s]+$/, '').split(/\s*[｜|]\s*/).map(s => oneLine(s, FIELD_MAX));
+    if (!l.startsWith(NOTE)) return;
+    let body = l.slice(NOTE.length).replace(/^[\s`*_]*[:：]?\s*/, '');
+    // 標記單獨一行、內容寫在下一行（2026-11 實測 Cursor 會這樣寫）：下一行有「｜」才算
+    if (!body.trim() && /[｜|]/.test(lines[i + 1] || '')) body = lines[i + 1].trim();
+    const f = body.replace(/[`*_\s]+$/, '').split(/\s*[｜|]\s*/).map(s => oneLine(s, FIELD_MAX));
     if (f[0]) got = { topic: f[0], result: f[1] || '-', files: f.slice(2).filter(Boolean).join('、') || '-' };
-  }
+  });
   return got;
 }
 const vague = s => !s || /^(-|未定|TBD|N\/A|none)$/i.test(String(s).trim());
@@ -92,10 +96,14 @@ function noteEntries(messages, from, to) {
   return out;
 }
 // 第 from 到 to 段裡還要請 Agent 寫的範圍：沒被 entries 涵蓋、而且裡面有 Agent 回覆文字的（只有出錯或停掉的回合，補佔位就好）
+// 簡短的回合：回覆不到 BRIEF 字、沒有用工具也沒有委派。noteAsk 說這種可以不寫索引行，
+// 壓縮時也不用請 Agent 補寫，補一筆「沒有索引」的佔位就好（細節照樣在逐字稿）
+const BRIEF = 300;
+const brief = m => !(m.parts || []).some(p => p.kind === 'tool' || p.kind === 'delegate') && partsText(m.parts).trim().length <= BRIEF;
 function noteHoles(messages, entries, from, to) {
   const out = [];
   let next = from;
-  const add = (a, b) => { if (messages.slice(a - 1, b).some(m => m.role !== 'user' && partsText(m.parts).trim())) out.push([a, b]); };
+  const add = (a, b) => { if (messages.slice(a - 1, b).some(m => m.role !== 'user' && partsText(m.parts).trim() && !brief(m))) out.push([a, b]); };
   for (const e of [...entries].sort((x, y) => x.from - y.from)) {
     if (e.from > next) add(next, e.from - 1);
     next = Math.max(next, e.to + 1);
@@ -281,6 +289,8 @@ function indexContext({ lines, file, index, level, tr = same, state }) {
     tr('逐字稿：{file}（完整原文，每則訊息一段，標題是「## #編號 誰 · 時間」）', { file }),
     tr('- 需要細節時，照索引上的編號去讀逐字稿的那幾段，不要只憑索引推測。'),
     tr('- 索引沒提到的事，先在逐字稿裡搜尋；不能因為索引沒寫就當作沒發生過。'),
+    // 需求反覆改、決定被推翻時，索引裡同一件事會有好幾筆（不相鄰的不會合併）：講明以最後的為準
+    tr('- 同一件事有好幾筆、結論前後不同時，以編號最後的那筆為準（後來的決定取代前面的）；索引跟進程檔或最近的原文不一致時，以進程檔和最近的原文為準。'),
     tr('索引（每行：#起–#迄｜主題｜結論｜相關檔案）：'),
     ...(skipped ? [tr('（較早的 {n} 筆索引沒有附上，完整索引在 {file}）', { n: skipped, file: index })] : []),
     ...picked,

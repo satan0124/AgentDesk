@@ -5,7 +5,8 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { runAgent, listModels, readLimits, sessionSize, labelOf: labelOfCfg } = require('./agents');
-const { clearCache } = require('./cli');
+const { clearCache, resolveCli } = require('./cli');
+const { runProc } = require('./proc');
 const connect = require('./connect');
 const { buildContext, delegateReply } = require('./context');
 const { MODES, modeOf, modeNotes, delegateTail, frugalNote, frugalPlace, needWork, stickyReadOnly, mustRestart } = require('./mode');
@@ -96,7 +97,7 @@ function listConvs() {
     if (!f.endsWith('.json')) continue;
     const id = f.slice(0, -5);
     const c = convs.get(id) || (() => { try { return JSON.parse(fs.readFileSync(path.join(CONV_DIR, f), 'utf8')); } catch { return null; } })();
-    if (c) out.push({ id: c.id, title: c.title, updated: c.updated, cwd: c.cwd, running: running.has(c.id),
+    if (c) out.push({ id: c.id, title: c.title, updated: c.updated, cwd: c.cwd, mode: modeOf(c), running: running.has(c.id),
       pinned: !!c.pinned, archived: !!c.archived, compressing: running.get(c.id)?.compress || null });
   }
   return out.sort((a, b) => b.updated - a.updated);
@@ -291,6 +292,43 @@ function mcpConfigFor(convId) {
   return file;
 }
 
+// ---------- 環境檢查（設定頁） ----------
+// 第一次用的人最常卡在安裝與設定：一次列出每一項，各給一行結果與修法。form：設定頁目前的內容（含還沒存的）；cwd：目前對話的資料夾
+// 回傳 [{ label, ok: true|false|null（不適用）, detail, fix }]
+async function envCheck(form, cwd) {
+  const rows = [];
+  // Node.js：AgentDesk.bat 第一次啟動要 npm install，需要 18 以上
+  const node = resolveCli('node');
+  if (!node) rows.push({ label: 'Node.js', ok: false, detail: tr('找不到'), fix: tr('到 https://nodejs.org/ 安裝 18 以上的版本，裝好後重開 AgentDesk') });
+  else {
+    const r = await runProc(node[0], [...node.slice(1), '--version'], { timeout: 15000 });
+    const v = String(r.stdout || '').trim(), major = +(v.match(/^v(\d+)/) || [])[1];
+    rows.push({ label: 'Node.js', ok: major >= 18, detail: v || tr('讀不到版本'), fix: major >= 18 ? '' : tr('到 https://nodejs.org/ 安裝 18 以上的版本，裝好後重開 AgentDesk') });
+  }
+  // 各 Agent：內建三個都列（沒加入的註明可以不用），自訂的只列已加入的；同時偵測
+  const list = Object.entries(form.agents || {}).filter(([id, c]) => !c?.custom || c.enabled);
+  rows.push(...await Promise.all(list.map(async ([id, c]) => {
+    const label = labelOfCfg(id, c);
+    if (!c.custom && !c.enabled) return { label, ok: null, detail: tr('沒加入（可以不用）'), fix: '' };
+    const r = await connect.check(id, c, true).catch(e => ({ found: false, error: e.message }));
+    if (!r.found) return { label, ok: false, detail: tr('找不到 CLI'),
+      fix: r.install?.cmd ? tr('到下面 {name} 的設定按「安裝」，或在 PowerShell 執行：{cmd}', { name: label, cmd: r.install.cmd }) : tr('確認下面 {name} 的「CLI 指令」填對了', { name: label }) };
+    const ver = [r.version, r.account].filter(Boolean).join(' · ');
+    if (r.loggedIn === false) return { label, ok: false, detail: tr('已安裝，未登入') + (r.version ? ` · ${r.version}` : ''),
+      fix: r.canLogin ? tr('到下面 {name} 的設定按「登入」', { name: label }) : tr('照 {name} 的說明登入', { name: label }) };
+    return { label, ok: true, detail: ver || tr('已找到 CLI'), fix: '' };
+  })));
+  // 工作資料夾：新對話的預設資料夾與目前對話的資料夾，要存在、能寫入（Agent 要在裡面讀寫檔）
+  for (const dir of [...new Set([form.defaultCwd, cwd].filter(Boolean))]) {
+    const label = tr('工作資料夾');
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) { rows.push({ label, ok: false, detail: tr('不存在：{dir}', { dir }), fix: tr('在「新對話預設工作資料夾」或對話上方選一個存在的資料夾') }); continue; }
+    const probe = path.join(dir, `.agentdesk-write-test-${process.pid}`);
+    try { fs.writeFileSync(probe, ''); fs.unlinkSync(probe); rows.push({ label, ok: true, detail: dir, fix: '' }); }
+    catch { rows.push({ label, ok: false, detail: tr('不能寫入：{dir}', { dir }), fix: tr('換一個有寫入權限的資料夾，或檢查這個資料夾的權限') }); }
+  }
+  return rows;
+}
+
 // ---------- Agent 工作狀況（右欄） ----------
 const jobs = new Map();          // jobId -> job
 const finished = [];             // 最近完成，新的在前
@@ -323,7 +361,9 @@ function startJob(agent, conv, role, prompt) {
   return job;
 }
 function trackEvent(job, ev) {
-  if (ev.type === 'tool') {
+  if (ev.type === 'tool' && ev.sub) { job.activity = tr('子代理：{action}', { action: `${ev.sub.name} ${ev.sub.detail || ''}`.trim() }); job.tools++; }
+  else if (ev.type === 'tool' && ev.subError) return;
+  else if (ev.type === 'tool') {
     if (ev.status === 'running') { job.activity = `${ev.name} ${ev.detail || ''}`.trim(); job.tools++; }
     else job.activity = tr('思考中…');
   } else if (ev.type === 'text') job.activity = tr('回覆中…');
@@ -640,7 +680,12 @@ function startServer() {
     server.requestTimeout = 0;
     server.headersTimeout = 0;
     server.timeout = 0;
-    server.listen(0, '127.0.0.1', () => { port = server.address().port; resolve(); });
+    server.listen(0, '127.0.0.1', () => {
+      port = server.address().port;
+      // 只在自我測試：讓假 Agent 能像 MCP bridge 一樣打 /delegate（畫面測試的「委派中刪對話」，見 tools/validate/fixtures/fake-hold.js）
+      if (process.env.AGENTDESK_SELFTEST) process.env.AGENTDESK_TEST_DELEGATE = JSON.stringify({ port, token });
+      resolve();
+    });
   });
 }
 
@@ -754,8 +799,21 @@ ipcMain.handle('dialog:folder', async (_, current) => {
   return r.canceled ? null : r.filePaths[0];
 });
 ipcMain.handle('open:path', (_, p) => (p && fs.existsSync(p) ? shell.openPath(p) : 'not found'));
+// 右側預覽（畫面的 openPreview）：Markdown 讀內容回去畫；HTML 由畫面用 iframe 直接開，這裡只給修改時間（每 1.5 秒比一次，檔案改了就重畫）
+const PREVIEW_MAX = 2000000;
+ipcMain.handle('file:read', (_, p) => {
+  try {
+    const st = fs.statSync(p);
+    if (!st.isFile()) return { error: 'not a file' };
+    const fd = fs.openSync(p, 'r'), buf = Buffer.alloc(Math.min(st.size, PREVIEW_MAX));
+    try { fs.readSync(fd, buf, 0, buf.length, 0); } finally { fs.closeSync(fd); }
+    return { text: buf.toString('utf8'), mtime: st.mtimeMs, cut: st.size > PREVIEW_MAX };
+  } catch (e) { return { error: e.message }; }
+});
+ipcMain.handle('file:mtime', (_, p) => { try { return fs.statSync(p).mtimeMs; } catch { return null; } });
 ipcMain.handle('open:url', (_, u) => { if (/^https:\/\//.test(u)) shell.openExternal(u); });
 ipcMain.handle('cli:check', (_, agent, cfg, force) => connect.check(agent, cfg, force));
+ipcMain.handle('env:check', (_, form, cwd) => envCheck(form || settings, cwd));
 ipcMain.handle('cli:install', (_, agent, cfg) => connect.install(agent, cfg));
 ipcMain.handle('cli:login', (_, agent, cfg) => connect.login(agent, cfg));
 ipcMain.handle('cli:browse', async () => {

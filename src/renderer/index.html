@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https:; frame-src file:;">
   <title>AgentDesk</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -80,6 +80,13 @@
     </footer>
   </main>
 
+  <aside id="previewPane" class="hidden">
+    <div class="pv-grip" title="拖曳調整寬度"></div>
+    <div class="pv-head"><span class="pv-name"></span><span class="spacer"></span>
+      <button class="icon-btn" data-pv="reload" title="重新整理">⟳</button><button class="icon-btn" data-pv="open" title="用系統程式開啟">↗</button><button class="icon-btn" data-pv="close" title="關閉預覽">✕</button></div>
+    <div class="pv-body"></div>
+  </aside>
+
   <aside id="agentPanel">
     <div class="panel-head">Agent 工作狀況<span id="panelCount" class="count"></span></div>
     <div id="agentCards"></div>
@@ -127,6 +134,11 @@
             <div><select id="setContext"><option value="lean">精簡（約 6,000 字）</option><option value="standard">標準（約 16,000 字）</option><option value="full">完整（約 40,000 字）</option></select>
             <div class="hint">換 Agent 講話時，會附上它沒看過的先前對話；委派結果交回 Claude 也照這個上限截短。附得越多越吃額度。</div></div></label>
           <label class="row check"><input type="checkbox" id="setDelegation"><span>讓 Claude 可以把工作委派給已加入的其他 Agent</span></label>
+        </section>
+        <section class="set-group" id="envGroup">
+          <h3>環境檢查<span class="spacer"></span><button id="envCheck" class="btn">檢查</button></h3>
+          <div class="muted env-hint">一次檢查 Node.js、各個 CLI 有沒有裝與登入、工作資料夾能不能寫入。第一次使用或出問題時按一下。</div>
+          <div id="envResult"></div>
         </section>
         <div id="agentSettings"></div>
       </div>

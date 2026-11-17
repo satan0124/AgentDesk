@@ -26,7 +26,10 @@ marked.setOptions({ gfm: true, breaks: true });
 
 // ---------- 工具 ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-function md(text) { try { return marked.parse(text || ''); } catch { return `<pre>${esc(text)}</pre>`; } }
+// Agent 回覆與預覽的 Markdown 可能夾著原始 HTML：框架類的標籤一律改成純文字顯示。
+// CSP 為了右側預覽開了 frame-src file:，不擋的話回覆裡的 <iframe src="file:..."> 會在主視窗裡載入沒有沙箱的本機頁面
+const FRAME_TAG = /<\/?(?:iframe|frame|frameset|object|embed)\b[^>]*>/gi;
+function md(text) { try { return marked.parse(text || '').replace(FRAME_TAG, m => esc(m)); } catch { return `<pre>${esc(text)}</pre>`; } }
 function el(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
 function dayLabel(ts) {
   const d = new Date(ts), now = new Date();
@@ -246,7 +249,7 @@ function renderConv() {
 function renderMsg(m) {
   if (m.role === 'user') {
     const node = el(`<div class="msg user" data-id="${m.id}">${m.agent !== 'claude' ? `<div class="to-tag">→ ${LABEL[m.agent]}</div>` : ''}${m.attachments?.length ? `<div class="msg-atts">${m.attachments.map(attHtml).join('')}</div>` : ''}${m.text ? `<div class="bubble">${esc(m.text)}</div>` : ''}${msgFootHtml(m)}</div>`);
-    node.querySelectorAll('.att[data-open]').forEach(x => x.onclick = () => api.openPath(x.dataset.open));
+    node.querySelectorAll('.att[data-open]').forEach(x => x.onclick = () => openLocal(x.dataset.open));
     return node;
   }
   const node = el(`<div class="msg assistant" data-id="${m.id}"></div>`);
@@ -356,13 +359,20 @@ function renderParts(parts, key, live) {
     while (j < parts.length && isStep(parts[j])) j++;
     const tools = parts.slice(i, j).filter(p => p.kind === 'tool');
     if (tools.length < 2) { html += partHtml(parts[i], `${key}-${i}`, live); continue; }
-    const last = tools.at(-1), failed = tools.filter(p => p.status === 'error').length;
+    // 收合那一行顯示最新的動作；有還在執行的（例如子代理）就顯示那一個，才看得到現在在做什麼
+    const last = tools.findLast(p => p.status === 'running') || tools.at(-1), failed = tools.filter(p => p.status === 'error').length;
     const status = tools.some(p => p.status === 'running') ? 'running' : failed ? 'error' : 'done';
-    html += `<details class="part tools" data-key="${key}-g${i}"><summary><span class="st ${status}">${STEP_ICON[status]}</span><span class="nm">${esc(t('{n} 個動作', { n: tools.length }))}${failed ? esc(t('（{n} 個失敗）', { n: failed })) : ''}</span><span class="dt">${esc(last.name)} ${esc(last.detail)}</span></summary>`
+    html += `<details class="part tools" data-key="${key}-g${i}"><summary><span class="st ${status}">${STEP_ICON[status]}</span><span class="nm">${esc(t('{n} 個動作', { n: tools.length }))}${failed ? esc(t('（{n} 個失敗）', { n: failed })) : ''}</span><span class="dt">${esc(last.name)} ${esc(toolDt(last))}</span></summary>`
       + `<div class="tg">${parts.slice(i, j).map((p, n) => partHtml(p, `${key}-${i + n}`, live)).join('')}</div></details>`;
     i = j - 1;
   }
   return html;
+}
+// 工具那一行的說明；子代理（Task／Agent 工具）另外帶「第幾個動作、最新是什麼」，看得到它現在在做什麼
+function toolDt(p) {
+  if (!p.subSteps) return p.detail || '';
+  const sub = t('子代理 {n} 個動作，最新：{last}', { n: p.subSteps, last: p.subLast || '' }) + (p.subErrors ? t('（{n} 個失敗）', { n: p.subErrors }) : '');
+  return `${p.detail || ''} · ${sub}`;
 }
 function partHtml(p, k, live) {
   // 「需要工作模式」的標記不顯示（回合結束時也會從存檔拿掉）
@@ -372,7 +382,7 @@ function partHtml(p, k, live) {
     return `<details class="part think" data-key="${k}"><summary><span>💭</span><span>${t('思考過程')}</span></summary><div class="tx">${esc(p.text.trim())}</div></details>`;
   }
   if (p.kind === 'tool') {
-    return `<details class="part tool" data-key="${k}"><summary><span class="st ${p.status}">${STEP_ICON[p.status] || STEP_ICON.done}</span><span class="nm">${esc(p.name)}</span><span class="dt">${esc(p.detail)}</span></summary>${p.output ? `<pre class="out">${esc(p.output)}</pre>` : ''}</details>`;
+    return `<details class="part tool" data-key="${k}"><summary><span class="st ${p.status}">${STEP_ICON[p.status] || STEP_ICON.done}</span><span class="nm">${esc(p.name)}</span><span class="dt">${esc(toolDt(p))}</span></summary>${p.output ? `<pre class="out">${esc(p.output)}</pre>` : ''}</details>`;
   }
   if (p.kind === 'notice') return `<div class="part notice">${esc(p.text)}</div>`;
   if (p.kind === 'delegate') {
@@ -530,7 +540,7 @@ $('#compressBtn').onclick = () => compressWith(agent);
 $('#messages').addEventListener('click', async e => {
   if (!e.target.closest('.idx-mark') || !current) return;
   const info = await api.compressInfo(current.id);
-  if (info?.index) api.openPath(info.index);
+  if (info?.index) openLocal(info.index);
 });
 
 // ---------- 側欄右上：對話／工作模式（切換鈕在「新對話」右邊，管的是目前開著的這個對話） ----------
@@ -553,7 +563,7 @@ function workFile(c = current) {
   const sep = c.cwd.includes('\\') ? '\\' : '/';
   return c.cwd.replace(/[\\/]+$/, '') + sep + c.work.file.split('/').join(sep);
 }
-$('#workChip').onclick = () => current?.work && api.openPath(workFile());
+$('#workChip').onclick = () => current?.work && openLocal(workFile());
 
 // 切到工作模式時取工作名（進程檔的檔名）。then：存好之後要接著做的事（「切到工作模式並繼續」用）
 let workPopThen = null;
@@ -661,7 +671,7 @@ function renderWork() {
   }
   $('#workInfo').innerHTML = html;
 }
-$('#workInfo').onclick = e => { if (e.target.closest('.nm') && current?.work) api.openPath(workFile()); };
+$('#workInfo').onclick = e => { if (e.target.closest('.nm') && current?.work) openLocal(workFile()); };
 // 還沒開始聊的對話：工作資料夾裡有進程檔，就在資料夾選單旁顯示「接續工作」
 async function refreshWorkList() {
   const id = current?.id;
@@ -696,6 +706,12 @@ async function submit() {
   const text = $('#input').value.trim();
   if (!text && !pending.length) return;
   if (!current) { const c = await api.createConv(settings.defaultCwd); current = c; }
+  // 同一個資料夾已經有別的對話在工作模式執行：兩邊同時改檔可能互相蓋掉，先問（對話模式與壓縮只讀，不算）
+  if (current.mode === 'work') {
+    const key = p => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
+    const other = (await api.listConvs()).find(c => c.id !== current.id && c.running && !c.compressing && c.mode === 'work' && key(c.cwd) === key(current.cwd));
+    if (other && !await confirmBox(t('「{title}」也在這個資料夾用工作模式執行中，兩邊同時改檔可能互相蓋掉。仍要送出嗎？', { title: t(other.title) }))) return;
+  }
   const atts = pending; pending = [];
   $('#input').value = '';
   delete drafts._new;
@@ -808,9 +824,90 @@ $('#messages').addEventListener('click', async e => {
   catch (err) { alertBox(t(String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))); }
 });
 
+// ---------- 右側預覽：Markdown 照訊息的樣式畫，HTML 用沙箱 iframe 開（不能碰 AgentDesk 本身） ----------
+const PREVIEW_EXT = /\.(md|markdown|html?)$/i;
+const preview = { path: '', mtime: null, timer: null };
+async function openPreview(p) {
+  preview.path = p;
+  $('#previewPane').classList.remove('hidden');
+  document.body.classList.add('previewing');
+  $('#previewPane .pv-name').textContent = p.split(/[\\/]/).pop();
+  $('#previewPane .pv-name').title = p;
+  await renderPreview();
+  clearInterval(preview.timer);
+  // 檔案改了（例如 Agent 正在寫說明文件）就重畫
+  preview.timer = setInterval(async () => {
+    if (!preview.path) return;
+    const m = await api.fileMtime(preview.path);
+    if (m && m !== preview.mtime) renderPreview();
+  }, 1500);
+  fitTopbar();
+}
+async function renderPreview() {
+  const p = preview.path, body = $('#previewPane .pv-body');
+  const keep = body.scrollTop;
+  if (/\.html?$/i.test(p)) {
+    preview.mtime = await api.fileMtime(p);
+    body.innerHTML = `<iframe sandbox="allow-scripts" src="${esc(fileUrl(p))}"></iframe>`;
+    return;
+  }
+  const r = await api.readFile(p);
+  if (r.error) { preview.mtime = null; body.innerHTML = `<div class="pv-msg">${esc(t('讀不到檔案：{path}', { path: p }))}</div>`; return; }
+  preview.mtime = r.mtime;
+  body.innerHTML = `<div class="md">${md(r.text)}</div>${r.cut ? `<div class="pv-msg">${esc(t('檔案太大，只顯示開頭的部分。'))}</div>` : ''}`;
+  // 圖片與連結的相對路徑以這個檔案所在的資料夾為準
+  fixImages(body, p.replace(/[\\/][^\\/]*$/, ''));
+  body.scrollTop = keep;
+}
+function closePreview() {
+  clearInterval(preview.timer);
+  preview.path = ''; preview.mtime = null;
+  $('#previewPane').classList.add('hidden');
+  $('#previewPane .pv-body').innerHTML = '';
+  document.body.classList.remove('previewing');
+  fitTopbar();
+}
+// 本機檔案：Markdown、HTML 在右側預覽，圖片放大，其他用系統程式開
+function openLocal(p) {
+  if (PREVIEW_EXT.test(p)) openPreview(p);
+  else if (IMG_EXT.test(p)) openLightboxPath(p);
+  else api.openPath(p);
+}
+// 拖左緣調整預覽寬度，記住下次用（存的是像素寬；主欄的最小寬度由 style.css 擋）
+try { const w = +localStorage.getItem('previewWidth'); if (w >= 300) $('#previewPane').style.flexBasis = w + 'px'; } catch {}
+$('#previewPane .pv-grip').onmousedown = e => {
+  e.preventDefault();
+  const grip = e.target, startX = e.clientX, startW = $('#previewPane').getBoundingClientRect().width;
+  grip.classList.add('on'); document.body.classList.add('pv-dragging');
+  const move = ev => { $('#previewPane').style.flexBasis = Math.max(300, startW + (startX - ev.clientX)) + 'px'; fitTopbar(); };
+  const up = () => {
+    grip.classList.remove('on'); document.body.classList.remove('pv-dragging');
+    removeEventListener('mousemove', move); removeEventListener('mouseup', up);
+    try { localStorage.setItem('previewWidth', String(Math.round($('#previewPane').getBoundingClientRect().width))); } catch {}
+  };
+  addEventListener('mousemove', move); addEventListener('mouseup', up);
+};
+$('#previewPane .pv-head').onclick = e => {
+  const act = e.target.closest('[data-pv]')?.dataset.pv;
+  if (act === 'close') closePreview();
+  else if (act === 'reload') renderPreview();
+  else if (act === 'open' && preview.path) api.openPath(preview.path);
+};
+// 預覽裡的連結：頁內錨點捲過去，本機檔案照 openLocal，網址開瀏覽器
+$('#previewPane .pv-body').addEventListener('click', e => {
+  const a = e.target.closest('a[href]');
+  if (!a) return;
+  e.preventDefault();
+  const href = a.getAttribute('href') || '';
+  if (href.startsWith('#')) { const el = document.getElementById(decodeURIComponent(href.slice(1))); if (el) el.scrollIntoView(); return; }
+  if (/^https?:/i.test(href)) return api.openUrl(href);
+  const p = a.dataset.path;
+  if (p) openLocal(p);
+});
+
 // ---------- 圖片：本機路徑轉 file://，點擊放大 ----------
 // Agent 寫的本機路徑（絕對、file://、相對於工作資料夾）→ Windows 絕對路徑；網址回 null
-function localPath(raw) {
+function localPath(raw, base = current?.cwd) {
   raw = (raw || '').trim();
   if (!raw || raw.startsWith('#') || /^(https?|data|mailto|blob|about):/i.test(raw)) return null;
   let p = raw.replace(/^<|>$/g, '');
@@ -819,22 +916,22 @@ function localPath(raw) {
   p = p.replace(/[?#].*$/, '').replace(/:(\d+)(:\d+)?$/, '');   // 去掉 ?query、#anchor、:行號
   const abs = /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\');
   if (!abs) {
-    if (!current?.cwd) return null;
-    p = current.cwd.replace(/[\\/]+$/, '') + '\\' + p.replace(/^\.?[\\/]/, '');
+    if (!base) return null;
+    p = base.replace(/[\\/]+$/, '') + '\\' + p.replace(/^\.?[\\/]/, '');
   }
   return p.split('/').join('\\');
 }
 const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico)$/i;
 
-function fixImages(node) {
+function fixImages(node, base) {
   for (const img of node.querySelectorAll('.md img')) {
-    const p = localPath(img.getAttribute('src'));
+    const p = localPath(img.getAttribute('src'), base);
     if (!p) continue;
     img.dataset.path = p;
     img.src = fileUrl(p);
   }
   for (const a of node.querySelectorAll('.md a[href]')) {
-    const p = localPath(a.getAttribute('href'));
+    const p = localPath(a.getAttribute('href'), base);
     if (p) { a.dataset.path = p; a.title = p; }
   }
 }
@@ -846,8 +943,7 @@ $('#messages').addEventListener('click', e => {
   e.preventDefault();
   const p = a.dataset.path || localPath(a.getAttribute('href'));
   if (!p) { const href = a.getAttribute('href') || ''; if (/^https?:/i.test(href)) api.openUrl(href); return; }
-  if (IMG_EXT.test(p)) openLightboxPath(p);
-  else api.openPath(p);
+  openLocal(p);
 });
 function openLightboxPath(p) {
   lb.list = [{ src: fileUrl(p), dataset: { path: p } }];
@@ -1409,6 +1505,7 @@ function openSettings(note) {
   $('#setContext').value = form.context || 'standard';
   renderAgentSettings();
   $('#setMsg').textContent = note || '';
+  $('#envResult').innerHTML = '';
   $('#settingsModal').classList.remove('hidden');
   for (const a of Object.keys(form.agents)) if (form.agents[a].enabled) checkCli(a);
 }
@@ -1532,11 +1629,23 @@ function renderPicker() {
   for (const b of $('#agentPicker').children) b.classList.toggle('on', b.dataset.agent === agent);
 }
 
+// 設定頁「環境檢查」：主程序逐項檢查（main.js 的 envCheck），每項一行結果，有問題的多一行修法
+async function runEnvCheck() {
+  const b = $('#envCheck'), box = $('#envResult');
+  b.disabled = true;
+  box.innerHTML = `<div class="muted">${esc(t('檢查中…'))}</div>`;
+  const rows = await api.envCheck(form ? readSettingsForm() : settings, current?.cwd).catch(e => [{ label: t('環境檢查'), ok: false, detail: String(e.message || e), fix: '' }]);
+  b.disabled = false;
+  box.innerHTML = rows.map(r => `<div class="env-row ${r.ok === true ? 'ok' : r.ok === false ? 'bad' : 'skip'}"><span class="env-mark">${r.ok === true ? '✓' : r.ok === false ? '✗' : '–'}</span>`
+    + `<span class="env-label">${esc(r.label)}</span><span class="env-detail" title="${esc(r.detail)}">${esc(r.detail)}</span>${r.fix ? `<div class="env-fix">${esc(r.fix)}</div>` : ''}</div>`).join('');
+}
+$('#envCheck').onclick = e => { e.preventDefault(); runEnvCheck(); };
+
 // 第一次使用（給別人用時）：Claude 沒裝或沒登入就直接帶到設定
 async function firstRunCheck() {
   const r = await api.cliCheck('claude', settings.agents.claude);
   conn.claude = r;
-  if (!r.found || !r.loggedIn) openSettings(t(r.found ? 'Claude Code 還沒登入：按「登入」完成後即可開始對話。' : '找不到 Claude Code：按「安裝」，裝好後再按「登入」。'));
+  if (!r.found || !r.loggedIn) { openSettings(t(r.found ? 'Claude Code 還沒登入：按「登入」完成後即可開始對話。' : '找不到 Claude Code：按「安裝」，裝好後再按「登入」。')); runEnvCheck(); }
 }
 
 // ---------- 啟動 ----------

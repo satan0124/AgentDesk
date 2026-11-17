@@ -34,6 +34,12 @@
       else parts.push({ kind: 'thinking', text: ev.text });
     } else if (ev.type === 'tool') {
       const found = ev.id && parts.find(p => p.kind === 'tool' && p.id === ev.id);
+      if (ev.sub || ev.subError) {
+        if (!found) return;
+        if (ev.sub) { found.subSteps = (found.subSteps || 0) + 1; found.subLast = `${ev.sub.name} ${ev.sub.detail || ''}`.trim().slice(0, 300); }
+        if (ev.subError) found.subErrors = (found.subErrors || 0) + 1;
+        return;
+      }
       if (found) {
         for (const k of ['name', 'detail', 'status', 'output']) if (ev[k] !== undefined) found[k] = ev[k];
       } else parts.push({ kind: 'tool', id: ev.id, name: ev.name || 'tool', detail: ev.detail || '', status: ev.status, output: ev.output });
@@ -51,10 +57,14 @@
   // 每輪回覆最後那一行索引（邊對話邊記，見 compress.js 的 noteAsk）：主程序在回合結束時取出存到訊息上，這一行同樣不顯示、不留在存檔裡
   const NOTE = '[[agentdesk:index]]';
   // 只認行首的標記（前面可以有空白、條列、粗體）：回覆內文提到這個標記（例如解釋程式碼時）不能被當成索引行拿掉
-  const NOTE_LINE = /^[ \t>*_`-]*\[\[agentdesk:index\]\][^\n]*\n?/gm;
-  // live：還在串流時，連結尾「打到一半的標記」也先藏起來，免得閃一下
+  // 標記單獨一行、內容寫在下一行（2026-11 實測 Cursor 會這樣寫）：下一行有「｜」就一起拿掉（同 compress.js 的 parseNote）
+  const NOTE_LINE = /^[ \t>*_`-]*\[\[agentdesk:index\]\](?:[ \t`*_:：]*\r?\n[ \t]*(?=[^\n]*[｜|])[^\n]*|[^\n]*)\n?/gm;
+  const NOTE_AT = /^[ \t>*_`-]*\[\[agentdesk:index\]\]/m;
+  // live：還在串流時，連結尾「打到一半的標記」也先藏起來，免得閃一下；
+  // 索引行寫在最後，串流中看到行首的標記就把它之後的都先藏起來（標記單獨一行時，下一行還沒打到「｜」前不會閃出來）
   function stripMark(text, live) {
     let s = String(text || '');
+    if (live && s.includes(NOTE)) { const at = s.search(NOTE_AT); if (at >= 0) s = s.slice(0, at); }
     if (s.includes(NOTE)) s = s.replace(NOTE_LINE, '').replace(/\s+$/, '');
     // 標記單獨一行：整行拿掉；行首標記後面還有字：只拿掉標記
     if (hasMark(s)) return s.replace(/^[ \t>*_`-]*\[\[agentdesk:work\]\][ \t`*_]*(\r?\n|$)/gm, '').replace(MARK_AT, '$1').replace(/\s+$/, '');

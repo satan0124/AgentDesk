@@ -68,15 +68,17 @@ Delegated agents follow the chat's mode, so in chat mode the same read-only limi
 
 **Workflow and control**
 
-- Chat mode and work mode per chat (💬 / 🛠 at the top of the sidebar).
+- Chat mode and work mode per chat (💬 / 🛠 at the top of the sidebar). AgentDesk asks first if another chat is already running in work mode in the same folder.
 - Pick the model and effort per chat from the agent card.
 - The right panel shows each agent's status, session size and remaining quota, with **Restart**, plus **Compress** when a session gets large.
+- **Environment check** in Settings checks Node.js, whether each CLI is installed and signed in, and whether the working folders are writable, with a fix for each problem.
 - An optional "save tokens" rule per agent: no narration, answer at the end, no repetition.
 
 **Desktop**
 
 - Search chats, group them by date or project, pin, rename and archive; each chat keeps its own draft.
 - Attach files and folders, paste screenshots, drop files, and preview images full screen.
+- Click a Markdown or HTML file in a reply to preview it on the right; the preview refreshes when the file changes.
 - Runs of tool actions fold into one line in replies.
 - English, Traditional Chinese and Simplified Chinese UI, following the system language by default.
 

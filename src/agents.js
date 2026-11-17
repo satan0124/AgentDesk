@@ -117,7 +117,13 @@ function claudeParser(emit, state) {
         break;
       }
       case 'assistant':
-        if (evt.parent_tool_use_id) break;
+        // 子代理（Task／Agent 工具，含背景執行的）自己的動作：不另外列，記在發動它的那個工具上（畫面顯示「子代理第幾個動作、最新是什麼」）
+        if (evt.parent_tool_use_id) {
+          for (const b of evt.message?.content || []) {
+            if (b.type === 'tool_use') emit({ type: 'tool', id: evt.parent_tool_use_id, sub: { name: b.name.replace(/^mcp__\w+?__/, ''), detail: toolDetail(b.name, b.input) } });
+          }
+          break;
+        }
         // 每個請求各自的用量；最後一個請求的輸入量就是這個 session 現在的大小（見 sessionSize）
         if (evt.message?.usage) state.lastUsage = evt.message.usage;
         for (const b of evt.message?.content || []) {
@@ -130,6 +136,11 @@ function claudeParser(emit, state) {
         }
         break;
       case 'user':
+        // 子代理的工具結果：只記失敗數（之前沒擋，結果會變成一堆沒有名稱的「tool」動作）
+        if (evt.parent_tool_use_id) {
+          for (const b of evt.message?.content || []) if (b.type === 'tool_result' && b.is_error) emit({ type: 'tool', id: evt.parent_tool_use_id, subError: true });
+          break;
+        }
         for (const b of evt.message?.content || []) {
           if (b.type === 'tool_result' && !state.hidden.has(b.tool_use_id)) {
             const out = Array.isArray(b.content) ? b.content.map(c => c.text || '').join('\n') : b.content;

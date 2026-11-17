@@ -17,11 +17,13 @@ In chat mode AgentDesk tells every agent not to change files and uses each CLI's
 | Cursor Agent CLI | `--mode ask` | run commands automatically (`--force`) |
 | Custom agents | instruction in the prompt only | as configured |
 
-This is not a sandbox. Claude's editing tools (Edit, Write, MultiEdit, NotebookEdit) stay off even if you allowed them in `permissions.allow`, but Bash commands and MCP tools you allowed still run, and they can change files. A custom agent can ignore the instruction.
+This is not a sandbox. Claude's editing tools (Edit, Write, MultiEdit, NotebookEdit) stay off even if you allowed them in `permissions.allow`, but Bash commands and MCP tools you allowed still run, and they can change files. A custom agent can ignore the instruction. In a 2026-11-17 test on Windows, Codex's read-only sandbox blocked both a shell write and a write through an MCP tool (`node_repl`).
 
 When an agent needs to change a file in chat mode, it explains what it would change and **Switch to work mode and continue** appears under the reply. Clicking it switches the chat and lets the same agent carry on.
 
 A Cursor session that has run read-only cannot go back to writing, so when a chat switches to work mode AgentDesk starts a new Cursor session and passes the earlier chat along as context. Chats created before modes existed open in chat mode.
+
+If another chat in the same folder is running in work mode, AgentDesk asks before sending, since two agents changing files at the same time can overwrite each other. Chat mode and compression only read, so they do not count.
 
 ## Shared context
 
@@ -51,17 +53,17 @@ flowchart LR
 
 **Transcript.** After every turn AgentDesk writes the chat to `transcript.md`, one numbered section per message. This uses no AI.
 
-**Index as you chat.** Every turn asks the replying agent to end with one line: `[[agentdesk:index]] topic｜outcome｜related files`, passing the previous topic so follow-up questions reuse it. AgentDesk stores the line on the message and removes it from the screen, the saved chat and the transcript. Consecutive turns with the same topic merge into one entry, and their different outcomes are joined.
+**Index as you chat.** Every turn asks the replying agent to end with one line: `[[agentdesk:index]] topic｜outcome｜related files`, passing the previous topic so follow-up questions reuse it. AgentDesk stores the line on the message and removes it from the screen, the saved chat and the transcript. Consecutive turns with the same topic merge into one entry, and their different outcomes are joined. A brief reply (a few sentences, no tools, no delegation) may skip the line.
 
 **Compressing.** Click 🗜 in the top bar, or **Compress** on an agent card in the right panel.
 
 1. Turns that recorded an index line are used as they are.
-2. Sections without one, if they contain a reply, are indexed by the agent you chose. If that agent's session has seen every such section and resuming it costs less than a fresh read, the index is written in that session. Otherwise AgentDesk starts a clean session and puts the text of those sections in the prompt, in parts of up to 100,000 characters, one request per part.
+2. Sections without one, if they contain a reply longer than 300 characters or used tools or delegation, are indexed by the agent you chose; shorter ones get a placeholder entry. If that agent's session has seen every such section and resuming it costs less than a fresh read, the index is written in that session. Otherwise AgentDesk starts a clean session and puts the text of those sections in the prompt, in parts of up to 100,000 characters, one request per part.
 3. AgentDesk checks the result: related files that appear neither in those sections nor in the working folder are removed, files changed in those sections are added from the action log, and missing sections get a placeholder entry.
-4. Chats without a progress file also keep a "Current state" and a "Next steps" line.
+4. Chats without a progress file also get a "Current state" and a "Next steps" line from the agent that writes the missing sections. When no agent is needed, the lines from an earlier compression stay, marked with the section they were written at.
 5. The entries are appended to `index.md`, and every agent's session is cleared.
 
-From then on, an agent starting a session gets the index plus the recent messages (the last 4 the index covers and anything after), and reads the transcript by section number when it needs details. A line in the chat marks how far the index reaches; click it to open `index.md`. Compressing again only covers the new sections.
+From then on, an agent starting a session gets the index plus the recent messages (the last 4 the index covers and anything after), and reads the transcript by section number when it needs details. When the same matter has several entries with different outcomes, the agent is told the latest one wins, and that the progress file and recent messages beat the index. A line in the chat marks how far the index reaches; click it to open `index.md`. Compressing again only covers the new sections.
 
 Measured results are in [benchmarks.md](benchmarks.md).
 
@@ -93,6 +95,16 @@ The Antigravity template leaves the model to the CLI by default (no `--model`) a
 - A model set in Settings or for a chat that is not on the list read is marked **not confirmed available**.
 - **Reload** runs `agy models` again every time instead of reusing an earlier list.
 - When a run fails, AgentDesk reads the list again. If the chosen model is not on it, the error gets an explanation and a **Choose a model for Antigravity** button. AgentDesk never switches to another model by itself.
+
+## File preview
+
+Clicking a local file in a reply, an attachment, the progress file or the index opens it according to its type:
+
+- Markdown (`.md`, `.markdown`): rendered on the right in the same style as replies. Relative images and links are resolved from the file's own folder; a link to another Markdown or HTML file opens in the same pane.
+- HTML (`.html`, `.htm`): loaded in a sandboxed frame on the right. Its scripts run, but cannot reach AgentDesk.
+- Images: full-screen viewer. Other files: the default app.
+
+The preview takes the place of the agent panel while it is open, checks the file every 1.5 seconds and redraws when it changes. Drag its left edge to resize it; the width is remembered.
 
 ## Where data lives
 
@@ -133,3 +145,12 @@ node tools/validate.js --live   # plus real Claude / Codex / Cursor round trips 
 ```
 
 The fake agents live in `tools/validate/fixtures/`.
+
+Releasing:
+
+```bash
+node tools/release.js 0.2.1 docs/release-v0.2.1.md --dry   # checks and validation only
+node tools/release.js 0.2.1 docs/release-v0.2.1.md         # bump, commit, tag, push, GitHub Release
+```
+
+The notes file has English, Traditional Chinese and Simplified Chinese parts separated by `---`, each with install steps. The script stops at the first failed step and prints what is already done.

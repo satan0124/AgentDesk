@@ -39,6 +39,29 @@ New chats, 5 questions each, real agents:
 
 In Claude's 4th turn the working folder's own Stop hook pulled it into an unrelated task; that was the test setup, not the feature.
 
+On 2026-11-17 Cursor (model auto) and Antigravity (CLI default model, effort high) got 5 questions each in chat mode, with the "save tokens" rule on. The 3rd question was just "OK", to see whether brief replies skip the line as asked:
+
+| Agent | Turns with an index line | Skipped on "OK" | Reused the previous topic |
+|---|---|---|---|
+| Cursor | 4 / 4 | yes | not measured |
+| Antigravity | 4 / 4 | yes | turns 2 and 5 |
+
+- Cursor put `[[agentdesk:index]]` on a line of its own and the fields on the next line, so the old parser found none of the 4 lines and the next turns were not given the previous topic. AgentDesk now accepts that layout and hides both lines. Topic reuse for Cursor still needs a new run.
+- Antigravity wrote "TBD" as the outcome in 3 of 4 lines, even for questions it answered; the topic and files were filled in.
+
+**What the index line costs.** On 2026-11-17 Claude (Opus 5.5) and Codex (gpt-6.1-terra), both at xhigh, ran the same 5-question chat in one session, with the index request on every turn or not at all, twice each. Claude ran in safe mode; the "save tokens" rule was off. Averages for the whole chat:
+
+| | Claude | Codex |
+|---|---|---|
+| Output tokens | 15,995 → 16,143 (+1%) | 2,992 → 2,453 (−18%) |
+| Total tokens | 977k → 844k (−14%) | 363k → 264k (−27%) |
+| Session after 5 turns | 68.4k → 72.8k (+6%) | 27.0k → 27.2k (+1%) |
+| Cost (API prices reported by the CLI) | $2.24 → $2.31 (+3%) | not reported |
+| Turns with an index line | 8 / 8 (both skipped "OK") | 7 / 8 (both skipped "OK") |
+
+- The request (about 160 characters) and the line itself stay in the session, which grew a few thousand tokens over 5 turns. Output and total tokens moved by less than one run differs from another (how many files the agent chose to read), so the extra cost could not be told apart from that noise.
+- With the request off, the first answer (explaining `parseNote`) in every run included an example index line at the start of a line, and AgentDesk took it as the turn's index line. An agent that writes the marker at the start of a line while explaining it will have that line hidden.
+
 ## Continuing long chats
 
 Two real chats that had already been compressed, copied and continued with 6 questions each:
@@ -52,11 +75,13 @@ Two real chats that had already been compressed, copied and continued with 6 que
 
 The new turns were tidied up directly; only messages from before indexing as you chat needed an agent.
 
+**Overturned decisions.** A made-up 120-message chat changed its storage plan three times (#9–#10 JSON, #35–#36 SQLite, #79–#80 JSON + SQLite) and had the user reject a suggested Redis cache (#50–#52). Every turn had its index line, so compressing needed no agent. A new session then got the index and the last 4 messages and was asked what the storage plan is now and whether Redis was chosen. Claude and Codex both answered JSON + SQLite and no Redis, cited the right sections and checked the transcript, with or without the line telling them the latest entry wins (2026-11-17, one run each).
+
 ## Caveats
 
 - Tokens are not cost. Most requests in a long session are cache reads, which are cheaper, so the money saved is a smaller share than the tokens saved. In the 146-message run tokens dropped 88%, roughly a quarter less cost at API prices.
 - The larger the session, the more compressing saves. Chats with small sessions do not need it.
-- The extra tokens for writing the index line each turn have not been measured on their own.
+- The cost of the per-turn index line is measured above under "What the index line costs"; it was smaller than the noise between runs.
 - Cursor and custom agents have not been measured.
 
 ## "Save tokens" rule

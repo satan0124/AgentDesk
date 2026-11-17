@@ -435,6 +435,41 @@
   await api.send(mid, 'xecho', 'frugal off');
   const fr2 = await turnDone(kc3.messages.length + 4);
   out.frugal = { on: lastText(fr1).includes(fhead), off: !lastText(fr2).includes(fhead) };
+  // 7c2) 環境檢查：Node.js、各 Agent、工作資料夾各一行；沒加入的內建 Agent 註明可以不用；資料夾不存在時給修法；設定頁的按鈕畫出結果
+  const eset = await api.getSettings();
+  const env1 = await api.envCheck(eset, current.cwd);
+  const env2 = await api.envCheck({ ...eset, defaultCwd: current.cwd + '\\no-such-dir' }, null);
+  openSettings();
+  $('#envCheck').click();
+  for (let i = 0; i < 80 && !document.querySelector('#envResult .env-row'); i++) await wait(250);
+  const envText = $('#envResult').innerText;
+  out.env = { node: env1[0]?.label === 'Node.js' && env1[0].ok === true, agents: ['Echo', 'Agy', 'CC'].every(n => env1.some(r => r.label === n && r.ok === true)),
+    skipped: env1.filter(r => r.ok === null).map(r => r.label).join(), folder: env1.some(r => r.ok === true && r.detail === current.cwd),
+    missing: env2.some(r => r.ok === false && /no-such-dir/.test(r.detail) && !!r.fix), ui: document.querySelectorAll('#envResult .env-row').length === env1.length,
+    cjk: CJK.test(envText.split('\n').filter(l => !l.includes(current.cwd)).join('\n')) };
+  $('#settingsModal').classList.add('hidden');
+  // 7c3) 右側預覽：訊息裡的 .md 連結在右邊畫出來（右欄先讓位），預覽裡連到 .html 的連結換成沙箱 iframe；關掉後右欄回來
+  const pvDir = current.cwd.replace(/[\\/]+$/, '') + '\\docs\\guide';
+  const pvHost = document.createElement('div');
+  pvHost.innerHTML = '<div class="md"><a href="docs/guide/preview.md">guide</a></div>';
+  $('#messages').appendChild(pvHost);
+  fixImages(pvHost);
+  pvHost.querySelector('a').click();
+  for (let i = 0; i < 20 && !document.querySelector('#previewPane .pv-body h1'); i++) await wait(150);
+  const pvMd = { open: !$('#previewPane').classList.contains('hidden'), title: document.querySelector('#previewPane .pv-body h1')?.textContent === 'Preview Title',
+    name: $('#previewPane .pv-name').textContent === 'preview.md', bold: !!document.querySelector('#previewPane .pv-body strong'),
+    panelHidden: getComputedStyle($('#agentPanel')).display === 'none' };
+  document.querySelector('#previewPane .pv-body a').click();
+  for (let i = 0; i < 20 && !document.querySelector('#previewPane iframe'); i++) await wait(150);
+  const fr = document.querySelector('#previewPane iframe');
+  const pvHtml = { iframe: !!fr, sandbox: fr?.getAttribute('sandbox') === 'allow-scripts', src: /page\.html$/.test(fr?.src || ''), name: $('#previewPane .pv-name').textContent === 'page.html' };
+  document.querySelector('#previewPane [data-pv="close"]').click();
+  out.preview = { md: pvMd, html: pvHtml, closed: $('#previewPane').classList.contains('hidden') && getComputedStyle($('#agentPanel')).display !== 'none',
+    dir: pvDir, cjk: CJK.test([...document.querySelectorAll('#previewPane [title]')].map(x => x.title).join(' ')) };
+  // 回覆裡夾著的框架標籤（CSP 為了預覽開了 frame-src file:）要變成純文字，不能在主視窗載入
+  pvHost.innerHTML = `<div class="md">${md('see <iframe src="file:///C:/x.html"></iframe> and <embed src="file:///C:/y.pdf">')}</div>`;
+  out.preview.noFrame = !pvHost.querySelector('iframe, embed, object') && pvHost.textContent.includes('<iframe');
+  pvHost.remove();
   // 7d) 從這裡分支：新對話帶著到那一則為止的訊息，模式、工作、資料夾照舊，沒有 session；
   //     索引裡完全落在這段之內的筆數跟著過去（第一次壓縮的兩筆），之後的不帶；原本的對話不動
   const fsrc = await api.getConv(mid), fat = kc1.indexed, fmsg = fsrc.messages[fat - 1];
@@ -461,7 +496,7 @@
   out.state = { workNone: !kc1.state && !kc3.state };
   if (fc) {
     await api.updateConv(fc.id, { mode: 'chat' });
-    await api.send(fc.id, 'xecho', 'state turn');
+    await api.send(fc.id, 'xecho', 'state turn long');
     await waitTurn(fc.id, fat + 2);
     const sres = await api.compress(fc.id, 'xagy');
     const sc = await api.getConv(fc.id);
@@ -500,7 +535,7 @@
   //     壓縮時記到的直接用（主題相同、相鄰的合成一筆），只請 Agent 補沒記到的（xecho 那一輪）；全都記到了就不跑 Agent
   const msgTextOf = m => (m?.parts || []).filter(p => p.kind === 'text').map(p => p.text).join('');
   const nc = await api.createConv(current.cwd);
-  for (const [k, [a, s]] of [['xcc', 'note A one'], ['xcc', 'note A two'], ['xcc', 'note B'], ['xecho', 'plain turn']].entries()) {
+  for (const [k, [a, s]] of [['xcc', 'note A one'], ['xcc', 'note A two'], ['xcc', 'note B'], ['xecho', 'plain turn long']].entries()) {
     await api.send(nc.id, a, s);
     await waitTurn(nc.id, (k + 1) * 2);
   }
@@ -530,6 +565,50 @@
   out.notes.cjk = CJK.test(asked + out.notes.summary);
   await openConv(mid);
   await api.deleteConv(nc.id); await api.deleteConv(nc2.id);
+  // 7h) 回合或委派還沒結束就刪掉對話（v0.1.7、v0.1.8 修過的時序問題）：等 3 秒，對話不能被存回來。
+  //     xslow 一直輸出不結束；xhold 打 /delegate 請 xslow 做事，兩個都停在半途等這裡刪對話。存檔與逐字稿由 validate.js 查
+  const hset = await api.getSettings();
+  hset.agents.xslow.enabled = true; hset.agents.xhold.enabled = true;
+  settings = await api.setSettings(hset);
+  // 7g2) 同一個資料夾有別的對話在工作模式執行：送出前先問；按取消就不送、輸入框的字留著。對話模式不問
+  const sdA = await api.createConv(current.cwd);
+  await api.updateConv(sdA.id, { mode: 'work' });
+  await api.send(sdA.id, 'xslow', 'busy');
+  for (let i = 0; i < 40 && !(await api.listConvs()).find(x => x.id === sdA.id)?.running; i++) await wait(250);
+  const sdB = await api.createConv(current.cwd);
+  await openConv(sdB.id);
+  const sdKeep = window.confirmBox;
+  let sdAsked = '';
+  window.confirmBox = async msg => { sdAsked = msg; return false; };
+  // 先測工作模式（按取消、不送出），再測對話模式（不問、照常送出）；反過來的話第二次送出會變成按停止
+  current = await api.updateConv(sdB.id, { mode: 'work' });
+  $('#input').value = 'same dir work'; await submit();
+  const sdB2 = await api.getConv(sdB.id);
+  const sdWorkAsk = sdAsked, sdWorkInput = $('#input').value;
+  sdAsked = '';
+  current = await api.updateConv(sdB.id, { mode: 'chat' });
+  $('#input').value = 'same dir chat'; await submit();
+  const sdChat = sdAsked;
+  out.sameDir = { chatNoAsk: !sdChat, asked: sdWorkAsk.length > 10, kept: sdWorkInput === 'same dir work' && !sdB2.messages.length,
+    cjk: CJK.test(sdWorkAsk.replace(sdA.title, '')) };
+  window.confirmBox = sdKeep;
+  $('#input').value = '';
+  await api.deleteConv(sdA.id); await api.deleteConv(sdB.id);
+  await openConv(mid);
+  const holdCase = async (agentId, text) => {
+    const hc = await api.createConv(current.cwd);
+    await api.send(hc.id, agentId, text(hc.id));
+    let started = false, delegated = false;
+    for (let i = 0; i < 40 && !started; i++) { await wait(250); started = !!(await api.listConvs()).find(x => x.id === hc.id)?.running; }
+    // 讓 Agent（委派時是被委派的 xslow）真的跑起來
+    for (let i = 0; i < 20 && !delegated; i++) { await wait(250); delegated = (await api.agentStatus()).running.some(j => j.convId === hc.id && j.role === 'delegate'); }
+    await api.deleteConv(hc.id);
+    await wait(3000);
+    return { id: hc.id, started, delegated, gone: !(await api.getConv(hc.id)) && !(await api.listConvs()).some(x => x.id === hc.id) };
+  };
+  out.midDelete = { turn: await holdCase('xslow', () => 'hold'), delegate: await holdCase('xhold', id => `delegate xslow ${id}`) };
+  hset.agents.xslow.enabled = false; hset.agents.xhold.enabled = false;
+  settings = await api.setSettings(hset);
   // 8) 逐字稿：validate.js 依對話 id 讀主程序寫的檔，段數要等於訊息數；
   //    第二次啟動時帶入 window.__DELETE（第一次的對話），刪掉後它的逐字稿要跟著不見
   out.transcript = { id: mid, count: (await api.getConv(mid)).messages.length };

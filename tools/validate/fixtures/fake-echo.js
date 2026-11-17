@@ -13,6 +13,8 @@ process.stdin.on('data', c => { d += c; }).on('end', async () => {
   const parts = ['Echo got: ', last.slice(0, 60), '\n', `(args: ${process.argv.slice(2).join(' ')})`, '\n', `(head: ${head})`];
   if (idx) parts.push('\n', `(index: ${idx} recent: ${recent.length} first: ${recent[0] || 0} transcript: ${/transcript\.md/.test(d) ? 'yes' : 'no'})`,
     '\n', `(state: ${/^(Current state|現況)[:：] agy now/m.test(d) ? 'yes' : 'no'})`);
+  // 使用者的話有 long 時多回一段，讓回覆超過「簡短回合」的長度（compress.js 的 BRIEF），沒寫索引就要請 Agent 補
+  if (/\blong\b/.test(last)) parts.push('\n', `(filler: ${'lorem '.repeat(60).trim()})`);
   for (const part of parts) {
     process.stdout.write(part);
     await new Promise(r => setTimeout(r, 60));

@@ -16,6 +16,8 @@ const { spawnSync, spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
+// 原始碼統一成 LF 再比對：Windows 上 git 取出的檔可能是 CRLF（core.autocrlf），用換行寫的檢查會比對不到
+const readSrc = f => fs.readFileSync(path.join(SRC, f), 'utf8').replace(/\r\n/g, '\n');
 const FIX = path.join(__dirname, 'validate', 'fixtures');
 const STATE_DIR = path.join(ROOT, '.claude');
 const STATE_FILE = path.join(STATE_DIR, 'validate-state.json');
@@ -179,6 +181,27 @@ async function unitTests() {
     assert(r.text === 'Hello', `文字=${r.text}`);
     const tools = r.evs.filter(e => e.type === 'tool');
     assert(tools.length === 2 && tools.every(t => t.id === 'a'), `委派工具沒有隱藏：${JSON.stringify(tools)}`);
+  });
+
+  await check('解析：Claude 子代理（Task／Agent）的動作掛在發動它的工具上，不會變成沒有名稱的「tool」', () => {
+    const { applyEvent } = require(path.join(SRC, 'shared', 'reduce.js'));
+    const r = run('claude', [
+      { type: 'system', subtype: 'init', session_id: 's1' },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tA', name: 'Agent', input: { description: '市場調查', prompt: 'p' } }] } },
+      { type: 'assistant', parent_tool_use_id: 'tA', message: { content: [{ type: 'tool_use', id: 's1', name: 'WebSearch', input: { query: '宗門 經營' } }] } },
+      { type: 'user', parent_tool_use_id: 'tA', message: { content: [{ type: 'tool_result', tool_use_id: 's1', content: 'r', is_error: true }] } },
+      { type: 'assistant', parent_tool_use_id: 'tA', message: { content: [{ type: 'tool_use', id: 's2', name: 'WebFetch', input: { url: 'https://example.com' } }] } },
+      { type: 'user', parent_tool_use_id: 'tA', message: { content: [{ type: 'tool_result', tool_use_id: 's2', content: 'ok' }] } },
+      // 發動者不在這則訊息裡的子代理事件：不理（不能長出沒有名稱的工具）
+      { type: 'user', parent_tool_use_id: 'zz', message: { content: [{ type: 'tool_result', tool_use_id: 's9', content: 'x', is_error: true }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } },
+      { type: 'result', result: 'done', session_id: 's1' },
+    ]);
+    const msg = { parts: [] };
+    for (const e of r.evs) applyEvent(msg, e);
+    const tools = msg.parts.filter(p => p.kind === 'tool');
+    assert(tools.length === 1 && tools[0].name === 'Agent' && tools[0].detail === '市場調查' && tools[0].subSteps === 2 && tools[0].subLast === 'WebFetch https://example.com'
+      && tools[0].subErrors === 1, JSON.stringify(msg.parts));
   });
 
   await check('模型清單：自訂 Agent 列模型輸出的解析', () => {
@@ -376,7 +399,7 @@ async function unitTests() {
     assert(!mr('cursor', 'chat', 'chat') && !mr('cursor', 'work', 'work') && !mr('cursor', 'work', undefined) && !mr('cursor', 'work', 'work:main:x'), 'Cursor 不該重開的情況重開了');
     assert(!mr('cursor', 'work', 'chat', 'ask') && !mr('cursor', 'work', 'chat', 'plan'), '工作模式本來就選唯讀時不用重開');
     assert(!mr('codex', 'work', 'chat') && !mr('claude', 'work', 'chat') && !mr('xecho', 'work', 'chat') && stickyReadOnly('cursor') && !stickyReadOnly('codex'), '只有 Cursor 需要重開');
-    const mainSrc = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+    const mainSrc = readSrc('main.js');
     const turnSrc = mainSrc.slice(mainSrc.indexOf('async function startTurn('), mainSrc.indexOf('async function delegate('));
     const deleSrc = mainSrc.slice(mainSrc.indexOf('async function delegate('), mainSrc.indexOf('async function compress('));
     const before = (src, a, b) => src.includes(a) && src.indexOf(a) < src.indexOf(b);
@@ -674,7 +697,7 @@ async function unitTests() {
       exists: () => true, rel: f => f.replace('E:\\Proj\\', '').replace(/\\/g, '/') });
     assert(va.entries[0].files === 'src/b.js、docs/a.md', va.entries[0].files);
     // 主程序：exists 與 rel 都只認工作資料夾裡的路徑
-    const mainSrc = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+    const mainSrc = readSrc('main.js');
     assert(/const rel = f => \(path\.isAbsolute\(f\) && inCwd\(f\)/.test(mainSrc) && /verifyIndex\(uniq, \{[^}]*exists, rel \}\)/.test(mainSrc), '主程序沒有把 rel 傳給 verifyIndex');
     // 合併：主題相同（空白、引號、大小寫不計）又相鄰的一筆；結論用最新的，最新的是「未定」就留前面的；檔案合併
     const u = text => ({ role: 'user', text }), a = (note, text = 'ok') => ({ role: 'assistant', parts: [{ kind: 'text', text }], ...(note ? { note } : {}) });
@@ -689,19 +712,30 @@ async function unitTests() {
     // 從中間開始時，回覆前面那則使用者的話已經在索引裡 → 這筆只涵蓋回覆那一則
     assert(JSON.stringify(noteEntries(msgs, 2, 4).map(x => [x.from, x.to])) === '[[2,4]]', JSON.stringify(noteEntries(msgs, 2, 4)));
     // 沒記到的：#5–#6 有回覆文字要請 Agent 寫；#9–#10 只有出錯、沒有文字的回合，補佔位就好
-    assert(JSON.stringify(noteHoles(msgs, e, 1, 10)) === '[[5,6]]' && JSON.stringify(noteHoles(msgs, [], 1, 4)) === '[[1,4]]', JSON.stringify(noteHoles(msgs, e, 1, 10)));
+    const longMsgs = msgs.map((m, i) => (i === 5 ? a(null, 'x'.repeat(400)) : m));
+    assert(JSON.stringify(noteHoles(longMsgs, e, 1, 10)) === '[[5,6]]' && JSON.stringify(noteHoles([u('1'), a(null, 'y'.repeat(400)), u('2'), a(null)], [], 1, 4)) === '[[1,4]]',
+      JSON.stringify(noteHoles(longMsgs, e, 1, 10)));
+    // 簡短的回合（不到 300 字、沒有工具或委派）沒記到也不用請 Agent 補；短但用了工具的照樣要補
+    const toolMsgs = msgs.map((m, i) => (i === 5 ? { role: 'assistant', parts: [{ kind: 'tool', name: 'Read' }, { kind: 'text', text: 'ok' }] } : m));
+    assert(JSON.stringify(noteHoles(msgs, e, 1, 10)) === '[]' && JSON.stringify(noteHoles(toolMsgs, e, 1, 10)) === '[[5,6]]', JSON.stringify(noteHoles(msgs, e, 1, 10)));
+    assert(noteAsk().includes('可以不寫'), '索引要求沒說簡短回應可以不寫');
+    // 標記單獨一行、內容寫在下一行（真的 Cursor 會這樣寫）：取得到、兩行都拿掉；下一行不像索引（沒有｜）就不算、也不拿掉；串流中標記之後的先藏起來
+    const split = 'ans `[[agentdesk:index]]` inline\n\n[[agentdesk:index]]\nparse｜ok｜src/a.js';
+    assert(parseNote(split)?.topic === 'parse' && parseNote(split).files === 'src/a.js' && stripMark(split) === 'ans `[[agentdesk:index]]` inline'
+      && parseNote('a\n[[agentdesk:index]]\nnot index') === null && stripMark('a\n[[agentdesk:index]]\nnot index') === 'a\nnot index'
+      && stripMark('ans\n\n[[agentdesk:index]]\npar', true).trim() === 'ans', JSON.stringify([parseNote(split), stripMark(split), stripMark('ans\n\n[[agentdesk:index]]\npar', true)]));
     const { t, setLang } = require(path.join(SRC, 'shared', 'i18n.js'));
     setLang('en'); const en = noteAsk({ prev: 'Login', tr: t }) + noteAsk({ tr: t }); setLang('zh-CN'); const cn = noteAsk({ prev: '登录', tr: t }); setLang('zh-TW');
     assert(!CJK.test(en) && en.includes('copy "Login"') && en.includes(NOTE) && cn.includes('照抄“登录”') && cn.includes('用户看不到'), en + '\n' + cn);
     // 主程序：每輪附要求、回合結束時取出存到訊息上（在 status 事件拿掉那一行之前）
-    const main = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+    const main = readSrc('main.js');
     const turn = main.slice(main.indexOf('async function startTurn('), main.indexOf('// Claude 經 MCP 委派過來'));
     const at = s => turn.indexOf(s);
     assert(/noteAsk\(\{ prev: history\.findLast/.test(turn) && at('msg.note = note') > 0 && at('msg.note = note') < at("type: 'status'"), 'startTurn 沒有附要求或取出索引行');
   });
 
   await check('回合與壓縮的收尾：中途出錯也會清掉執行中；執行中被刪掉的對話不再存回去', () => {
-    const main = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+    const main = readSrc('main.js');
     const turn = main.slice(main.indexOf('async function startTurn('), main.indexOf('// Claude 經 MCP 委派過來'));
     const comp = main.slice(main.indexOf('async function compress('), main.indexOf('function startServer('));
     const fin = turn.slice(turn.lastIndexOf('} finally {'));
@@ -898,6 +932,9 @@ async function e2eTests() {
       xagy: c('fake-agy.js', { name: 'Agy', color: '#4f8ef7', format: 'antigravity', promptMode: 'stream-json', modelFlag: '--model', resumeFlag: '--conversation' }),
       // Claude 相容格式、會回報用量：測 session 大小用（不排進開頭的步驟，由 e2e-check.js 自己送）
       xcc: c('fake-claude.js', { name: 'CC', color: '#cc7755', format: 'claude', promptMode: 'stdin', resumeFlag: '--resume' }),
+      // 停在半途等測試刪對話：xslow 一直輸出不結束，xhold 打 /delegate 請 xslow 做事。平常不加入，測到時才打開
+      xslow: c('fake-slow.js', { name: 'Slow', color: '#888888', format: 'text', promptMode: 'stdin', enabled: false }),
+      xhold: c('fake-hold.js', { name: 'Hold', color: '#999999', format: 'text', promptMode: 'stdin', enabled: false, delegate: false }),
     },
   }, null, 2));
   // 沒有 mode 欄位的舊對話（已有訊息）：載入後要當成對話模式（唯讀）
@@ -908,6 +945,10 @@ async function e2eTests() {
   fs.mkdirSync(path.join(dir, 'docs', '進程'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'docs', '進程', 'Seeded.md'), ['# Seeded progress', '', '## ▶ Resume here', '- Status: two tasks listed.', '- Next: do task 2.', '',
     '## Tasks', '| # | Task | Status |', '|---|---|---|', '| 1 | Write parser | Done |', '| 2 | Wire panel | Pending |', ''].join('\n'));
+  // 右側預覽用：Markdown 連到同資料夾的 HTML
+  fs.mkdirSync(path.join(dir, 'docs', 'guide'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'docs', 'guide', 'preview.md'), ['# Preview Title', '', 'Some **bold** text.', '', '[Open page](page.html)', ''].join('\n'));
+  fs.writeFileSync(path.join(dir, 'docs', 'guide', 'page.html'), '<!doctype html><title>Page</title><h1>Hello page</h1>');
   const checkJs = fs.readFileSync(path.join(__dirname, 'validate', 'e2e-check.js'), 'utf8');
   const launch = async (language, steps, foreign, del) => {
     const s = JSON.parse(fs.readFileSync(path.join(data, 'settings.json'), 'utf8'));
@@ -925,7 +966,8 @@ async function e2eTests() {
       let buf = '';
       p.stdout.on('data', d => { buf += d; });
       p.stderr.on('data', d => { buf += d; });
-      const timer = setTimeout(() => { p.kill(); resolve(buf + '\n[timeout]'); }, 90000);
+      // 一次啟動要跑完整份 e2e-check.js（含刪對話後等 3 秒、等委派開始這類等待），留 150 秒
+      const timer = setTimeout(() => { p.kill(); resolve(buf + '\n[timeout]'); }, 150000);
       p.on('close', () => { clearTimeout(timer); resolve(buf); });
     });
     const line = out.split('\n').find(l => l.startsWith('[st] js '));
@@ -1072,6 +1114,15 @@ async function e2eTests() {
   // 第二次啟動用同一個工作名：進程檔已經在，不能被新範本蓋掉
   if (rc) await check('畫面：同名的進程檔已存在時沿用、不覆蓋', () => assert(workFileEn && workFileOf() === workFileEn && rc.work?.saved && rc.work?.note,
     JSON.stringify({ same: workFileOf() === workFileEn, saved: rc.work?.saved, note: rc.work?.note })));
+  await check('畫面：設定頁的環境檢查列出 Node.js、各 Agent、工作資料夾，有問題的附修法', () => { const v = r.env || {};
+    assert(v.node && v.agents && v.skipped === 'Codex,Cursor' && v.folder && v.missing && v.ui && v.cjk === false, JSON.stringify(v)); });
+  await check('畫面：同一個資料夾有別的對話在工作模式執行時，送出前先問（取消就不送、字留著）；對話模式不問', () => { const s = r.sameDir || {};
+    assert(s.chatNoAsk && s.asked && s.kept && s.cjk === false, JSON.stringify(s)); });
+  await check('畫面：點 .md 在右側預覽（Markdown 照樣式畫），預覽裡的 .html 連結用沙箱 iframe 開，關掉後右欄回來', () => { const p = r.preview || {};
+    assert(Object.values(p.md || {}).every(Boolean) && Object.values(p.html || {}).every(Boolean) && p.closed && p.noFrame && p.cjk === false, JSON.stringify(p)); });
+  await check('畫面：回合或委派還沒結束就刪掉對話，3 秒後對話、存檔、逐字稿都沒有回來', () => { const m = r.midDelete || {};
+    const back = c => !!c?.id && (fs.existsSync(path.join(data, 'conversations', `${c.id}.json`)) || fs.existsSync(path.join(data, 'transcripts', c.id)));
+    assert(m.turn?.started && m.turn.gone && !back(m.turn) && m.delegate?.started && m.delegate.delegated && m.delegate.gone && !back(m.delegate), JSON.stringify(m)); });
   if (rc) await check('畫面：刪對話時逐字稿與索引一起刪；簡中介面的逐字稿與索引沒有繁體字', () => {
     const cn = trRead(rc.transcript?.id), cnIdx = trRead(rc.transcript?.id, 'index.md'), foreign = new RegExp(`[${trad.join('')}]`);
     assert(trEn && idxEn && rc.transcript?.deleted && !fs.existsSync(path.join(data, 'transcripts', r.transcript.id)) && rc.transcript.id !== r.transcript.id

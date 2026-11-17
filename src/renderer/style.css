@@ -285,6 +285,23 @@ details.think .tx { margin: 4px 0 4px 22px; color: var(--muted); white-space: pr
 /* ---------- 右欄：Agent 工作狀況 ---------- */
 #agentPanel { width: 290px; flex-shrink: 0; background: var(--side); border-left: 1px solid #222226; display: flex; flex-direction: column; overflow-y: auto; padding: 0 10px 12px; }
 body.panel-off #agentPanel { display: none; }
+/* 右側預覽（Markdown、HTML）：開著的時候佔掉右欄的位置 */
+/* 寬度：預設 42%，可拖左緣調整（app.js 記在 localStorage）；主欄至少留 520px，視窗窄時讓預覽縮 */
+#previewPane { flex: 0 1 42%; min-width: 300px; max-width: 1100px; display: flex; flex-direction: column; background: var(--side); border-left: 1px solid #222226; position: relative; }
+#previewPane.hidden { display: none; }
+body.previewing #agentPanel { display: none; }
+body.previewing #main { min-width: 520px; }
+.pv-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; }
+.pv-grip:hover, .pv-grip.on { background: var(--accent); opacity: .5; }
+body.pv-dragging { cursor: col-resize; user-select: none; }
+body.pv-dragging iframe { pointer-events: none; }
+.pv-head { display: flex; align-items: center; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.pv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c9c6bf; }
+.pv-head .spacer { flex: 1; }
+.pv-body { flex: 1; overflow: auto; min-height: 0; }
+.pv-body .md { padding: 14px 20px 30px; }
+.pv-body iframe { width: 100%; height: 100%; border: 0; background: #fff; display: block; }
+.pv-body .pv-msg { padding: 16px; color: var(--muted); }
 .panel-head { height: 48px; display: flex; align-items: center; gap: 8px; font-weight: 600; border-bottom: 1px solid #26262a; margin: 0 -10px 10px; padding: 0 14px; flex-shrink: 0; }
 .panel-head .count { margin-left: auto; font-size: 11px; font-weight: 600; background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 8px; }
 .panel-head .count:empty { display: none; }
@@ -363,6 +380,13 @@ body.panel-off #agentPanel { display: none; }
 
 /* ---------- 設定：連結 CLI ---------- */
 .set-group h3 .spacer { flex: 1; }
+/* 環境檢查：每項一行（記號、名稱、結果），有問題的下一行是修法 */
+.env-hint { font-size: 12px; margin-bottom: 6px; }
+.env-row { display: grid; grid-template-columns: 18px 150px 1fr; gap: 4px 8px; align-items: baseline; padding: 4px 0; font-size: 13px; }
+.env-mark { font-weight: 700; text-align: center; }
+.env-row.ok .env-mark { color: var(--ok); } .env-row.bad .env-mark { color: var(--err); } .env-row.skip { color: var(--muted); }
+.env-detail { color: #c9c6bf; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.env-fix { grid-column: 3; color: #e2b153; font-size: 12px; overflow-wrap: anywhere; }
 .set-group h3 .btn { font-size: 12px; font-weight: 400; padding: 3px 12px; }
 .set-group.off { background: #1d1d20; }
 .set-group.off h3 { margin-bottom: 4px; }
