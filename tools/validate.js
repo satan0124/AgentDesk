@@ -447,6 +447,21 @@ async function unitTests() {
   });
 
   // 數字取自 2026-11 用真的 CLI 量到的用量（見 docs/進程/對話與工作模式.md「任務 #5」）
+  await check('這一輪的用量：Claude、Cursor 直接用；Codex、Antigravity 減掉上一輪的累計；算不出來不顯示', () => {
+    const { turnUsage } = require(path.join(SRC, 'agents.js'));
+    const cl = turnUsage({ kind: 'claude', cost: 0.12, usage: { input_tokens: 4, cache_creation_input_tokens: 100, cache_read_input_tokens: 9000, output_tokens: 50 } });
+    assert(cl.input === 9104 && cl.output === 50 && cl.total === 9154 && cl.cost === 0.12 && !cl.raw, JSON.stringify(cl));
+    const cu = turnUsage({ kind: 'cursor', usage: { inputTokens: 600, outputTokens: 40, cacheReadTokens: 25000, cacheWriteTokens: 0 } });
+    assert(cu.total === 25640 && cu.cost === undefined, JSON.stringify(cu));
+    const c1 = turnUsage({ kind: 'codex', usage: { input_tokens: 84000, output_tokens: 700 } }, undefined, false);
+    const c2 = turnUsage({ kind: 'codex', usage: { input_tokens: 134000, output_tokens: 1300 } }, c1.raw, true);
+    const c3 = turnUsage({ kind: 'codex', usage: { input_tokens: 50000, output_tokens: 200 } }, c2.raw, true);
+    const c4 = turnUsage({ kind: 'codex', usage: { input_tokens: 9, output_tokens: 1 } }, undefined, true);
+    assert(c1.total === 84700 && c2.input === 50000 && c2.output === 600 && c3.total === 50200 && c4.total === null && c4.raw.input === 9, JSON.stringify([c1, c2, c3, c4]));
+    const ag = turnUsage({ kind: 'antigravity', usage: { input_tokens: 20705, output_tokens: 2775 } }, { input: 16927, output: 1679 }, true);
+    assert(ag.input === 3778 && ag.output === 1096 && turnUsage({ kind: 'text', usage: { a: 1 } }) === null && turnUsage({ kind: 'claude' }) === null, JSON.stringify(ag));
+  });
+
   await check('session 大小：Claude 取最後一個請求、Codex 用累計的增量、Cursor 加總後除以請求數', () => {
     const { sessionSize } = agents;
     // Claude：一輪兩個請求，各自的用量在 assistant 事件；子代理（parent_tool_use_id）的不算；result 的加總不能拿來當大小
@@ -910,6 +925,29 @@ async function integrationTests() {
     const names = list?.result?.tools?.map(t => t.name) || [];
     assert(names.join() === 'ask_codex,ask_xabc', `工具：${names.join()}`);
   });
+
+  await check('逐字稿記下使用者允許或拒絕了什麼', async () => {
+    const { entry } = require(path.join(SRC, 'transcript.js'));
+    const e = entry({ role: 'assistant', agent: 'claude', ts: 1, parts: [{ kind: 'approval', tool: 'Bash', detail: 'npm test', status: 'allowed' }, { kind: 'approval', tool: 'Bash', detail: 'rm -rf x', status: 'denied' }] }, 3, { label: () => 'Claude' });
+    assert(/使用者允許：Bash npm test/.test(e) && /使用者拒絕：Bash rm -rf x/.test(e), e);
+  });
+
+  await check('核准：bridge 只在打開時多一個 approve 工具；Claude 工作模式才帶 --permission-prompt-tool，對話模式不帶', async () => {
+    const env = { ...process.env, AGENTDESK_HELPERS: '[]', AGENTDESK_APPROVE: '1' };
+    const p = spawn(nodeExe, [path.join(SRC, 'mcp-bridge.js')], { env });
+    let out = '';
+    p.stdout.on('data', d => { out += d; });
+    p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n');
+    await new Promise(r => setTimeout(r, 800));
+    p.kill();
+    const names = (out.split('\n').filter(Boolean).map(l => JSON.parse(l)).find(m => m.id === 2)?.result?.tools || []).map(t => t.name);
+    assert(names.join() === 'approve', `工具：${names.join()}`);
+    const { buildCommand } = require('../src/agents')._test;
+    const a = (readOnly, allowedTools = []) => buildCommand('claude', { cli: nodeExe, permission: 'default', readOnly }, { prompt: 'p', cwd, mcpConfig: 'm.json', allowedTools, permissionPromptTool: 'mcp__agents__approve' }).args;
+    const w = a(false), c = a(true), d = a(false, ['mcp__agents__ask_codex']);
+    assert(w[w.indexOf('--permission-prompt-tool') + 1] === 'mcp__agents__approve' && !w.includes('--allowedTools') && !c.includes('--permission-prompt-tool')
+      && d[d.indexOf('--allowedTools') + 1] === 'mcp__agents__ask_codex', [w, c, d].map(x => x.join(' ')).join('\n'));
+  });
   try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {}
 }
 
@@ -966,8 +1004,8 @@ async function e2eTests() {
       let buf = '';
       p.stdout.on('data', d => { buf += d; });
       p.stderr.on('data', d => { buf += d; });
-      // 一次啟動要跑完整份 e2e-check.js（含刪對話後等 3 秒、等委派開始這類等待），留 150 秒
-      const timer = setTimeout(() => { p.kill(); resolve(buf + '\n[timeout]'); }, 150000);
+      // 一次啟動要跑完整份 e2e-check.js（含刪對話後等 3 秒、等委派開始、核准這類等待；隱藏視窗的計時器會被拖慢），留 240 秒
+      const timer = setTimeout(() => { p.kill(); resolve(buf + '\n[timeout]'); }, 240000);
       p.on('close', () => { clearTimeout(timer); resolve(buf); });
     });
     const line = out.split('\n').find(l => l.startsWith('[st] js '));
@@ -1114,12 +1152,16 @@ async function e2eTests() {
   // 第二次啟動用同一個工作名：進程檔已經在，不能被新範本蓋掉
   if (rc) await check('畫面：同名的進程檔已存在時沿用、不覆蓋', () => assert(workFileEn && workFileOf() === workFileEn && rc.work?.saved && rc.work?.note,
     JSON.stringify({ same: workFileOf() === workFileEn, saved: rc.work?.saved, note: rc.work?.note })));
+  await check('畫面：每則回覆標題旁顯示這一輪的 tokens（有費用才顯示費用），右欄顯示這個對話的加總', () => { const u = r.usage || {};
+    assert(u.stored && u.shown && u.conv && u.cost && u.cjk === false, JSON.stringify(u)); });
   await check('畫面：設定頁的環境檢查列出 Node.js、各 Agent、工作資料夾，有問題的附修法', () => { const v = r.env || {};
     assert(v.node && v.agents && v.skipped === 'Codex,Cursor' && v.folder && v.missing && v.ui && v.cjk === false, JSON.stringify(v)); });
   await check('畫面：同一個資料夾有別的對話在工作模式執行時，送出前先問（取消就不送、字留著）；對話模式不問', () => { const s = r.sameDir || {};
     assert(s.chatNoAsk && s.asked && s.kept && s.cjk === false, JSON.stringify(s)); });
   await check('畫面：點 .md 在右側預覽（Markdown 照樣式畫），預覽裡的 .html 連結用沙箱 iframe 開，關掉後右欄回來', () => { const p = r.preview || {};
     assert(Object.values(p.md || {}).every(Boolean) && Object.values(p.html || {}).every(Boolean) && p.closed && p.noFrame && p.cjk === false, JSON.stringify(p)); });
+  await check('畫面：執行中逐項核准：出現核准卡片，按允許／拒絕 Agent 拿到對應的答案；等待中按停止一律拒絕', () => { const a = r.approval || {};
+    assert(a.allow && a.deny && a.stop && a.resolved && a.cjk === false, JSON.stringify(a)); });
   await check('畫面：回合或委派還沒結束就刪掉對話，3 秒後對話、存檔、逐字稿都沒有回來', () => { const m = r.midDelete || {};
     const back = c => !!c?.id && (fs.existsSync(path.join(data, 'conversations', `${c.id}.json`)) || fs.existsSync(path.join(data, 'transcripts', c.id)));
     assert(m.turn?.started && m.turn.gone && !back(m.turn) && m.delegate?.started && m.delegate.delegated && m.delegate.gone && !back(m.delegate), JSON.stringify(m)); });

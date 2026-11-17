@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
   openUrl: u => ipcRenderer.invoke('open:url', u),
   cliCheck: (agent, cfg, force) => ipcRenderer.invoke('cli:check', agent, cfg, !!force),
   envCheck: (form, cwd) => ipcRenderer.invoke('env:check', form, cwd),
+  answerApproval: (id, allow) => ipcRenderer.invoke('approval:answer', id, allow),
   cliInstall: (agent, cfg) => ipcRenderer.invoke('cli:install', agent, cfg),
   cliLogin: (agent, cfg) => ipcRenderer.invoke('cli:login', agent, cfg),
   cliBrowse: () => ipcRenderer.invoke('cli:browse'),

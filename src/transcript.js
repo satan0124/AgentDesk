@@ -36,6 +36,11 @@ function partsBody(parts, who, opts) {
   const flush = () => { if (tools.length) { out.push(tools.join('\n')); tools = []; } };
   const name = () => { if (!named) { out.push(`**${tr('{name}：', { name: who })}**`); named = true; } };
   for (const p of parts || []) {
+    if (p.kind === 'approval') {
+      name();
+      tools.push(`- ${tr(p.status === 'allowed' ? '使用者允許：{text}' : p.status === 'denied' ? '使用者拒絕：{text}' : '等使用者核准：{text}', { text: oneLine(`${p.tool || ''} ${p.detail || ''}`, TOOL_MAX) })}`);
+      continue;
+    }
     if (p.kind === 'tool') {
       name();
       tools.push(`- ${tr('工具：{text}', { text: oneLine(`${p.name || 'tool'} ${p.detail || ''}`, TOOL_MAX) })}${p.status === 'error' ? tr('（失敗）') : ''}`);

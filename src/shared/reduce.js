@@ -13,7 +13,7 @@
     }
     if (ev.type === 'delegate_end') {
       const d = msg.parts.find(p => p.kind === 'delegate' && p.id === ev.id);
-      if (d) { d.status = ev.error ? (ev.error === '已停止' ? 'stopped' : 'error') : 'done'; d.error = ev.error; }
+      if (d) { d.status = ev.error ? (ev.error === '已停止' ? 'stopped' : 'error') : 'done'; d.error = ev.error; if (ev.usage) d.usage = ev.usage; }
       return;
     }
     if (ev.type === 'context') { msg.ctxChars = ev.chars; return; }
@@ -43,6 +43,11 @@
       if (found) {
         for (const k of ['name', 'detail', 'status', 'output']) if (ev[k] !== undefined) found[k] = ev[k];
       } else parts.push({ kind: 'tool', id: ev.id, name: ev.name || 'tool', detail: ev.detail || '', status: ev.status, output: ev.output });
+    } else if (ev.type === 'approval') {
+      // 執行中逐項核准：等使用者按的卡片（pending）→ allowed／denied
+      const found = parts.find(p => p.kind === 'approval' && p.id === ev.id);
+      if (found) found.status = ev.status;
+      else parts.push({ kind: 'approval', id: ev.id, tool: ev.tool, detail: ev.detail || '', status: ev.status });
     } else if (ev.type === 'notice') {
       parts.push({ kind: 'notice', text: ev.text });
     }

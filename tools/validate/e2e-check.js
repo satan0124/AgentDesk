@@ -133,6 +133,11 @@
   out.size = { stored: n4.sizes?.xcc?.tokens, session: n4.sessions?.xcc, shown: /40\.1k/.test(sess()?.textContent || ''), notBig: !!sess() && !sess().classList.contains('big'),
     cjk: sess() ? CJK.test(sess().innerText + sess().title + sess().querySelector('button').title) : null,
     none: !document.querySelector('#agentCards .acard[data-agent="xecho"] .sess'), noCompress: !!sess() && !sess().querySelector('.sess-compress') };
+  // 3e2) 這一輪的用量：result 的 usage 加起來 75,110 → 回覆標題旁顯示 75.1k tokens（費用 0 不顯示），右欄有這個對話的加總
+  flush();
+  const useEl = [...document.querySelectorAll('#messages .msg.assistant')].at(-1)?.querySelector('.use-note');
+  out.usage = { stored: n4.messages.at(-1).meta?.turn?.total === 75110, shown: /75\.1k tokens/.test(useEl?.textContent || '') && !/\$/.test(useEl?.textContent || ''),
+    conv: /tokens/.test($('#convUsage').textContent), cost: usageHtml({ input: 1, output: 1, total: 2, cost: 0.5 }).includes('$0.50') && usageHtml({ input: 1, output: 1, total: 2, cost: 0.004 }).includes('$0.0040'), cjk: CJK.test((useEl?.textContent || '') + (useEl?.title || '') + $('#convUsage').textContent + $('#convUsage').title) };
   // 超過門檻（10 萬 tokens）：提醒重開
   current.sizes = { ...current.sizes, xcc: { tokens: 123456 } };
   renderAgentPanel();
@@ -607,6 +612,29 @@
     return { id: hc.id, started, delegated, gone: !(await api.getConv(hc.id)) && !(await api.listConvs()).some(x => x.id === hc.id) };
   };
   out.midDelete = { turn: await holdCase('xslow', () => 'hold'), delegate: await holdCase('xhold', id => `delegate xslow ${id}`) };
+  // 7i) 執行中逐項核准：xhold 像 Claude 的 --permission-prompt-tool 一樣打 /approve → 訊息裡出現核准卡片；
+  //     按允許／拒絕，Agent 拿到對應的答案；等待中按停止，一律拒絕、回合結束
+  const apConv = await api.createConv(current.cwd);
+  await openConv(apConv.id);
+  const apCase = async (act) => {
+    const n0 = (await api.getConv(apConv.id)).messages.length;
+    await api.send(apConv.id, 'xhold', `approve ${apConv.id}`);
+    let card = null;
+    for (let i = 0; i < 40 && !card; i++) { await wait(250); flush(); card = [...document.querySelectorAll('#messages .part.approval')].find(c => c.querySelector('[data-approve]')); }
+    const shown = !!card && /Bash/.test(card.textContent) && /npm test/.test(card.textContent);
+    const cardText = card?.textContent || '';
+    if (act === 'stop') await api.stop(apConv.id);
+    else card?.querySelector(`[data-allow="${act === 'allow' ? 1 : 0}"]`)?.click();
+    const c = await waitTurn(apConv.id, n0 + 2);
+    const last = c.messages.at(-1), ap = last.parts.find(p => p.kind === 'approval');
+    return { shown, answered: act === 'stop' ? last.status === 'stopped' && ap?.status === 'denied' : new RegExp(`"allow":${act === 'allow'}`).test(msgTextOf(last)) && ap?.status === (act === 'allow' ? 'allowed' : 'denied'), cardText };
+  };
+  const apAllow = await apCase('allow'), apDeny = await apCase('deny'), apStop = await apCase('stop');
+  flush();
+  out.approval = { allow: apAllow.shown && apAllow.answered, deny: apDeny.shown && apDeny.answered, stop: apStop.shown && apStop.answered,
+    resolved: document.querySelectorAll('#messages .part.approval.done').length === 3, cjk: CJK.test(apAllow.cardText.replace(/Bash|npm test/g, '')) };
+  await openConv(mid);
+  await api.deleteConv(apConv.id);
   hset.agents.xslow.enabled = false; hset.agents.xhold.enabled = false;
   settings = await api.setSettings(hset);
   // 8) 逐字稿：validate.js 依對話 id 讀主程序寫的檔，段數要等於訊息數；

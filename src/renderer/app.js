@@ -13,7 +13,7 @@ const EFFORTS = {
 // 強度選項：內建 Agent 用上表，自訂 Agent 用設定裡的「強度選項」（要有強度旗標）
 const effortsOf = a => (settings?.agents[a]?.custom ? Presets.effortList(settings.agents[a]) : EFFORTS[a] || []);
 const PERMS = {
-  claude: [['acceptEdits', '自動接受改檔（指令需另外允許）'], ['auto', 'auto：由分類器判斷'], ['bypassPermissions', '全部放行（不詢問）'], ['plan', '只規劃不動手']],
+  claude: [['acceptEdits', '自動接受改檔（指令需另外允許）'], ['default', '逐項詢問（改檔與指令都先問你）'], ['auto', 'auto：由分類器判斷'], ['bypassPermissions', '全部放行（不詢問）'], ['plan', '只規劃不動手']],
   codex: [['workspace-write', '可寫工作資料夾'], ['read-only', '唯讀'], ['danger-full-access', '完全存取（危險）']],
   cursor: [['force', '自動執行指令（--force）'], ['trust', '只信任資料夾，不自動跑指令'], ['ask', '唯讀問答（ask）'], ['plan', '只規劃（plan）']],
 };
@@ -259,7 +259,7 @@ function renderMsg(m) {
 
 function fillAssistant(node, m) {
   const open = new Set([...node.querySelectorAll('details[open]')].map(d => d.dataset.key));
-  let html = `<div class="who"><span class="badge ${m.agent}">${INITIAL[m.agent]}</span>${LABEL[m.agent]}${m.ctxChars ? `<span class="model ctx-note" title="${esc(t('這一輪附上的先前對話字數，會算進這個 Agent 的用量；可在設定調整附帶量'))}">${esc(t('附上先前對話 {n} 字', { n: m.ctxChars.toLocaleString() }))}</span>` : ''}</div>`;
+  let html = `<div class="who"><span class="badge ${m.agent}">${INITIAL[m.agent]}</span>${LABEL[m.agent]}${m.ctxChars ? `<span class="model ctx-note" title="${esc(t('這一輪附上的先前對話字數，會算進這個 Agent 的用量；可在設定調整附帶量'))}">${esc(t('附上先前對話 {n} 字', { n: m.ctxChars.toLocaleString() }))}</span>` : ''}${usageHtml(m.meta?.turn)}</div>`;
   html += renderParts(m.parts, m.id, m.status === 'running');
   if (m.status === 'running') html += `<div class="working"><span class="spinner"></span>${runningLabel(m)}</div>`;
   if (m.status === 'error' && m.error) html += `<div class="errbox">${esc(t(m.error))}</div>${reloginHtml(m.agent, m.error)}${pickModelHtml(m.agent, m.error)}`;
@@ -290,6 +290,20 @@ function fmtMsgTime(ts) {
     : d.getFullYear() === now.getFullYear() ? { month: 'short', day: 'numeric', ...time } : { year: 'numeric', month: 'short', day: 'numeric', ...time };
   try { return { text: new Intl.DateTimeFormat(lang, opt).format(d), full: d.toLocaleString(lang) }; }
   catch { return { text: d.toLocaleString(), full: d.toLocaleString() }; }
+}
+// 這一輪用了多少：總 tokens（輸入含快取＋輸出）與 CLI 回報的費用（API 牌價）；滑過看明細
+function usageHtml(u) {
+  if (!u?.total) return '';
+  const tip = t('輸入 {input}（含快取）、輸出 {output} tokens', { input: u.input.toLocaleString(), output: u.output.toLocaleString() })
+    + (u.cost ? '\n' + t('費用是 CLI 回報的 API 牌價，訂閱方案扣的是額度') : '');
+  return `<span class="model use-note" title="${esc(tip)}">${esc(t('{n} tokens', { n: fmtTokens(u.total) }))}${u.cost ? ` · $${u.cost < 0.01 ? u.cost.toFixed(4) : u.cost.toFixed(2)}` : ''}</span>`;
+}
+// 這個對話加總（每則回覆和委派卡片上記的）；只算有回報的
+function convUsage(c) {
+  let total = 0, cost = 0, n = 0;
+  const add = u => { if (u?.total) { total += u.total; cost += u.cost || 0; n++; } };
+  for (const m of c?.messages || []) { add(m.meta?.turn); for (const p of m.parts || []) if (p.kind === 'delegate') add(p.usage); }
+  return n ? { total, cost } : null;
 }
 function msgFootHtml(m) {
   const tm = m.ts ? fmtMsgTime(m.ts) : null;
@@ -385,10 +399,15 @@ function partHtml(p, k, live) {
     return `<details class="part tool" data-key="${k}"><summary><span class="st ${p.status}">${STEP_ICON[p.status] || STEP_ICON.done}</span><span class="nm">${esc(p.name)}</span><span class="dt">${esc(toolDt(p))}</span></summary>${p.output ? `<pre class="out">${esc(p.output)}</pre>` : ''}</details>`;
   }
   if (p.kind === 'notice') return `<div class="part notice">${esc(p.text)}</div>`;
+  if (p.kind === 'approval') {
+    if (p.status === 'pending') return `<div class="part approval"><div class="ap-q">${esc(t('要允許這個動作嗎？'))}</div><div class="ap-act"><b>${esc(p.tool)}</b> <code>${esc(p.detail)}</code></div>`
+      + `<div class="ap-btns"><button class="btn primary" data-approve="${esc(p.id)}" data-allow="1">${esc(t('允許'))}</button><button class="btn" data-approve="${esc(p.id)}" data-allow="0">${esc(t('拒絕'))}</button></div></div>`;
+    return `<div class="part approval done ${p.status}"><span class="st">${p.status === 'allowed' ? '✓' : '✕'}</span>${esc(t(p.status === 'allowed' ? '已允許' : '已拒絕'))} <b>${esc(p.tool)}</b> <span class="dt">${esc(p.detail)}</span></div>`;
+  }
   if (p.kind === 'delegate') {
     const st = t({ running: '執行中…', done: '完成', error: '失敗', stopped: '已停止' }[p.status] || p.status);
     return `<details class="part delegate ${p.agent}" data-key="${k}" ${p.status === 'running' ? 'data-running' : ''}>
-        <summary><span class="badge ${p.agent}">${INITIAL[p.agent]}</span><b>${esc(t('交給 {name}', { name: LABEL[p.agent] }))}</b><span class="dstate ${p.status}">${st}</span></summary>
+        <summary><span class="badge ${p.agent}">${INITIAL[p.agent]}</span><b>${esc(t('交給 {name}', { name: LABEL[p.agent] }))}</b><span class="dstate ${p.status}">${st}</span>${usageHtml(p.usage)}</summary>
         <div class="dbody"><div class="dprompt">${esc(p.prompt)}</div>${renderParts(p.parts, k, live)}${p.error && p.status !== 'stopped' ? `<div class="errbox">${esc(t(p.error))}</div>${reloginHtml(p.agent, p.error)}${pickModelHtml(p.agent, p.error)}` : ''}</div></details>`;
   }
   return '';
@@ -808,6 +827,13 @@ function pickModelHtml(agentId, error) {
   return `<button class="btn relogin" data-pickmodel="${agentId}">${esc(t('選擇 {name} 的模型', { name: LABEL[agentId] }))}</button>`;
 }
 $('#messages').addEventListener('click', e => {
+  const b = e.target.closest('[data-approve]');
+  if (!b) return;
+  e.stopPropagation();
+  b.parentElement.querySelectorAll('button').forEach(x => { x.disabled = true; });
+  api.answerApproval(b.dataset.approve, b.dataset.allow === '1');
+});
+$('#messages').addEventListener('click', e => {
   const b = e.target.closest('[data-pickmodel]');
   if (!b) return;
   e.stopPropagation();
@@ -1098,6 +1124,9 @@ function renderAgentPanel() {
   const cid = current?.id;
   const run = agentStatus.running.filter(j => j.convId === cid);
   $('#panelCount').textContent = run.length ? t('{n} 個工作中', { n: run.length }) : '';
+  const cu = convUsage(current);
+  $('#convUsage').textContent = cu ? t('這個對話：{n} tokens', { n: fmtTokens(cu.total) }) + (cu.cost ? ` · $${cu.cost.toFixed(2)}` : '') : '';
+  $('#convUsage').title = cu ? t('每則回覆與委派回報的用量加總；費用只算有回報的（Claude），是 API 牌價') : '';
   $('#agentCards').innerHTML = enabledAgents().map(a => {
     const mine = run.filter(j => j.agent === a);
     const jobs = mine.map(j => `<div class="job" title="${esc(j.prompt)}">

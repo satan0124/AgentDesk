@@ -21,6 +21,8 @@
 
 对话模式下 Agent 需要改文件时，会先说明要改什么，消息下方出现“切换到工作模式并继续”。点了就切换模式，由同一个 Agent 接着做。
 
+**运行中逐项批准（只有 Claude）**：工作模式下，设置页 Claude 的权限是“自动接受改文件”或“逐项询问”时，需要许可的动作（命令；逐项询问时连改文件也算）会在回复里弹出卡片，有“允许”“拒绝”，Claude 会等你点。点停止或删掉对话都算拒绝。这用的是 Claude Code 的 `--permission-prompt-tool`，经 AgentDesk 的 MCP bridge 问你；Codex、Cursor 的非交互模式没有对应的做法，按各自的权限设置。
+
 Cursor 的 session 用只读跑过就回不到可写，所以对话切到工作模式时，AgentDesk 会替 Cursor 重开 session，先前的对话作为上下文带过去。加入模式之前的旧对话，打开时是对话模式。
 
 同一个文件夹有别的对话正在用工作模式运行时，发送前会先问，因为两个 Agent 同时改文件可能互相覆盖。对话模式和压缩只读，不算。
@@ -80,6 +82,7 @@ flowchart LR
 - **剩余额度**（5 小时、每周）：Claude 每次回复后更新，Codex 每 5 分钟读一次，Cursor 没有提供。
 - **session 大小**：之后每一轮至少要重发的 tokens。Claude 是准的，Codex、Cursor 是估的。超过 100,000 会提醒，卡片上多一个“压缩”按钮。
 - **重开**：清掉这个 Agent 在这个对话的 session。
+- **用量**：每条回复的名字旁边显示这一轮的 tokens（输入含缓存，加上输出），CLI 有报告费用时一起显示（Claude，API 价格）。右栏显示这个对话的加总。Codex 和 Antigravity 报告的是整个 session 的累计，AgentDesk 会减掉上一轮；更新 AgentDesk 后，原来 session 的第一轮不显示。
 
 ## 自定义 Agent
 

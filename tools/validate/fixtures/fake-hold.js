@@ -7,8 +7,22 @@ let d = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', c => { d += c; }).on('end', () => {
   const tick = label => { let n = 0; setInterval(() => process.stdout.write(`${label} ${n++}\n`), 100); };
-  const m = d.match(/^delegate (\S+) (\S+)\s*$/m);
   const t = process.env.AGENTDESK_TEST_DELEGATE;
+  // 「approve <對話 id>」：像 Claude 的 --permission-prompt-tool 一樣打 /approve，回報使用者按了什麼就結束
+  const ap = d.match(/^approve (\S+)\s*$/m);
+  if (ap && t) {
+    const { port, token } = JSON.parse(t);
+    const body = JSON.stringify({ token, conv: ap[1], tool_name: 'Bash', input: { command: 'npm test' } });
+    const req = http.request({ host: '127.0.0.1', port, path: '/approve', method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, res => {
+      let b = '';
+      res.on('data', x => { b += x; });
+      res.on('end', () => { process.stdout.write(`approval answer ${b}\n`); process.exit(0); });
+    });
+    req.on('error', e => { process.stdout.write(`approve failed ${e.message}\n`); process.exit(0); });
+    return req.end(body);
+  }
+  const m = d.match(/^delegate (\S+) (\S+)\s*$/m);
   if (!m || !t) return tick('hold');
   const { port, token } = JSON.parse(t);
   process.stdout.write(`delegating to ${m[1]}\n`);

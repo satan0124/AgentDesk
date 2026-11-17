@@ -25,7 +25,31 @@ const TOOLS = HELPERS.map(h => ({
   },
 }));
 
+// 工作模式要使用者核准的工具：Claude Code 用 --permission-prompt-tool 指到這裡（主程序只在需要時打開）
+const APPROVE = process.env.AGENTDESK_APPROVE === '1';
+if (APPROVE) TOOLS.push({
+  name: 'approve',
+  description: 'Internal: Claude Code calls this to ask the AgentDesk user to allow a tool call. Do not call it yourself.',
+  inputSchema: { type: 'object', properties: { tool_name: { type: 'string' }, input: { type: 'object' }, tool_use_id: { type: 'string' } }, required: ['tool_name'] },
+});
+
 function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+
+function post(pathName, payload) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({ token: TOKEN, conv: CONV, ...payload });
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: pathName, method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, res => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', d => data += d);
+      res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve({ error: 'Could not parse the AgentDesk response' }); } });
+    });
+    req.setTimeout(0);
+    req.on('error', e => resolve({ error: 'Could not reach AgentDesk: ' + e.message }));
+    req.end(body);
+  });
+}
 
 function delegate(agent, args) {
   return new Promise((resolve) => {
@@ -53,8 +77,14 @@ async function handle(msg) {
     } });
   }
   if (method === 'tools/list') return send({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
+  if (method === 'tools/call' && params?.name === 'approve' && APPROVE) {
+    const a = params.arguments || {};
+    const r = await post('/approve', { tool_name: a.tool_name, input: a.input || {}, tool_use_id: a.tool_use_id });
+    const out = r.allow ? { behavior: 'allow', updatedInput: a.input || {} } : { behavior: 'deny', message: r.message || r.error || 'The user denied this in AgentDesk.' };
+    return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(out) }] } });
+  }
   if (method === 'tools/call') {
-    const agent = TOOLS.some(t => t.name === params?.name) ? params.name.slice(4) : null;
+    const agent = TOOLS.some(t => t.name === params?.name && t.name !== 'approve') ? params.name.slice(4) : null;
     if (!agent) return send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool' } });
     const r = await delegate(agent, params.arguments || {});
     const text = r.error ? `[${agent} failed] ${r.error}${r.text ? '\n\nPartial output:\n' + r.text : ''}` : (r.text || '(no text reply)');

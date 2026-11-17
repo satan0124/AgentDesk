@@ -21,6 +21,8 @@ This is not a sandbox. Claude's editing tools (Edit, Write, MultiEdit, NotebookE
 
 When an agent needs to change a file in chat mode, it explains what it would change and **Switch to work mode and continue** appears under the reply. Clicking it switches the chat and lets the same agent carry on.
 
+**Approving actions as they happen (Claude only).** In work mode, when Claude's permission in Settings is **Accept edits automatically** or **Ask each time**, an action that needs permission (a command, or an edit under Ask each time) shows a card in the reply with **Allow** and **Deny**, and Claude waits for your answer. Pressing Stop or deleting the chat counts as Deny. This uses Claude Code's `--permission-prompt-tool` through AgentDesk's MCP bridge; Codex and Cursor have no equivalent in their non-interactive modes, so they keep their own permission settings.
+
 A Cursor session that has run read-only cannot go back to writing, so when a chat switches to work mode AgentDesk starts a new Cursor session and passes the earlier chat along as context. Chats created before modes existed open in chat mode.
 
 If another chat in the same folder is running in work mode, AgentDesk asks before sending, since two agents changing files at the same time can overwrite each other. Chat mode and compression only read, so they do not count.
@@ -80,6 +82,7 @@ The right panel shows the current chat only: whether each agent is idle or worki
 - **Remaining usage** (5-hour and weekly): Claude updates after every reply, Codex is read every 5 minutes, Cursor does not report it.
 - **Session size**: the tokens re-sent on every later turn at minimum. Exact for Claude, estimated for Codex and Cursor. Above 100,000 it is flagged and **Compress** appears on the card.
 - **Restart** clears that agent's session in this chat.
+- **Usage**: each reply shows that turn's tokens (input including cache, plus output) next to the agent name, with the cost when the CLI reports one (Claude, at API prices). The panel shows the total for this chat. Codex and Antigravity report running totals per session, so AgentDesk subtracts the previous turn; the first turn after an AgentDesk update in an existing session shows nothing.
 
 ## Custom agents
 

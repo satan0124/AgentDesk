@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { runAgent, listModels, readLimits, sessionSize, labelOf: labelOfCfg } = require('./agents');
+const { runAgent, listModels, readLimits, sessionSize, turnUsage, toolDetail, labelOf: labelOfCfg } = require('./agents');
 const { clearCache, resolveCli } = require('./cli');
 const { runProc } = require('./proc');
 const connect = require('./connect');
@@ -217,6 +217,14 @@ function notesFor(conv, agent, role = 'main') {
   }
   return notes;
 }
+// 這一輪用了多少（agents.js 的 turnUsage）；累計型的 CLI（Codex、Antigravity）記下這一輪的累計值，下一輪才減得出增量
+function usageOf(conv, agent, r, resumed) {
+  const u = turnUsage(r, conv.usageRaw?.[agent], resumed);
+  if (!u) return null;
+  if (u.raw) conv.usageRaw = { ...(conv.usageRaw || {}), [agent]: u.raw };
+  const { raw, ...rest } = u;
+  return rest.total === null ? null : rest;
+}
 // 丟掉某個 Agent 在這個對話的 session（下一輪重開，先前的對話當作參考附上），連同記下的大小
 function dropSession(conv, agent) {
   delete conv.sessions[agent];
@@ -282,12 +290,13 @@ ${list.map(a => `- mcp__agents__ask_${a}：${labelOf(a)}${settings.agents[a].des
 使用者點名要哪個 Agent 做、要求第二意見或交叉檢查，或工作明顯適合平行分工時才委派；一般問題自己回答。
 委派後要讀它們的回覆，檢查結果再回報使用者，不要原封不動轉貼。`;
 
-function mcpConfigFor(convId) {
+// approve：這一輪要不要讓 bridge 開 approve 工具（工作模式、權限會問的時候，見 needsApproval）
+function mcpConfigFor(convId, { delegateTo = helpers(), approve = false } = {}) {
   const file = path.join(MCP_DIR, `${convId}.json`);
   fs.writeFileSync(file, JSON.stringify({ mcpServers: { agents: {
     type: 'stdio', command: process.execPath, args: [BRIDGE],
     env: { ELECTRON_RUN_AS_NODE: '1', AGENTDESK_PORT: String(port), AGENTDESK_TOKEN: token, AGENTDESK_CONV: convId,
-      AGENTDESK_HELPERS: JSON.stringify(helpers().map(id => ({ id, name: labelOf(id) }))) },
+      AGENTDESK_HELPERS: JSON.stringify(delegateTo.map(id => ({ id, name: labelOf(id) }))), AGENTDESK_APPROVE: approve ? '1' : '0' },
   } } }, null, 2));
   return file;
 }
@@ -328,6 +337,37 @@ async function envCheck(form, cwd) {
   }
   return rows;
 }
+
+// ---------- 執行中逐項核准（Claude 的 --permission-prompt-tool） ----------
+// 工作模式、權限是「逐項詢問」或「自動接受改檔」時，Claude 要用需要許可的工具（指令、改檔）會先問：
+// bridge 打 /approve → 這裡在訊息裡放一張核准卡片、等使用者按 → 回給 bridge。停止或刪對話時一律拒絕
+const APPROVE_PERMS = ['default', 'acceptEdits'];
+const needsApproval = (conv, cfg) => modeOf(conv) === 'work' && APPROVE_PERMS.includes(cfg.permission || 'acceptEdits');
+const approvals = new Map();   // id -> { convId, resolve }
+function askApproval({ conv: convId, tool_name: tool, input }) {
+  const ctx = running.get(convId);
+  if (!ctx || ctx.compress || !ctx.msg) return Promise.resolve({ allow: false, message: 'No AgentDesk turn is running in this chat.' });
+  const { conv, msg } = ctx;
+  const id = crypto.randomUUID();
+  return new Promise(resolve => {
+    const finish = allow => {
+      if (!approvals.has(id)) return;
+      approvals.delete(id);
+      ctx.stops.delete(onStop);
+      if (convs.get(convId) === conv) emitTo(conv, msg, { type: 'approval', id, status: allow ? 'allowed' : 'denied' });
+      if (ctx.job) trackEvent(ctx.job, { type: 'text' });
+      resolve(allow ? { allow: true } : { allow: false, message: 'The user denied this in AgentDesk.' });
+    };
+    const onStop = () => finish(false);
+    approvals.set(id, { convId, finish });
+    ctx.stops.add(onStop);
+    emitTo(conv, msg, { type: 'approval', id, tool, detail: String(toolDetail(tool, input || {})).slice(0, 300), status: 'pending' });
+    if (ctx.job) { ctx.job.activity = tr('等你核准：{action}', { action: `${tool} ${toolDetail(tool, input || {})}`.slice(0, 120) }); publishJobs(); }
+    // 視窗不在前面時閃一下工作列，提醒有事要按
+    if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true);
+  });
+}
+ipcMain.handle('approval:answer', (_, id, allow) => { approvals.get(id)?.finish(!!allow); });
 
 // ---------- Agent 工作狀況（右欄） ----------
 const jobs = new Map();          // jobId -> job
@@ -470,11 +510,13 @@ async function startTurn(convId, agent, text, attachments = []) {
   } };
   if (agent === 'claude') {
     const canDelegate = settings.delegation && helpers().length > 0;
+    const approve = needsApproval(conv, cfg);
     const sys = [];
-    if (canDelegate) {
-      sys.push(claudeSystem(helpers()));
-      opts.mcpConfig = mcpConfigFor(convId);
-      opts.allowedTools = helpers().map(a => `mcp__agents__ask_${a}`);
+    if (canDelegate) sys.push(claudeSystem(helpers()));
+    if (canDelegate || approve) {
+      opts.mcpConfig = mcpConfigFor(convId, { delegateTo: canDelegate ? helpers() : [], approve });
+      opts.allowedTools = canDelegate ? helpers().map(a => `mcp__agents__ask_${a}`) : [];
+      if (approve) opts.permissionPromptTool = 'mcp__agents__approve';
     }
     if (notes.system) sys.push(notes.system);
     if (sys.length) opts.systemPrompt = sys.join('\n\n');
@@ -498,12 +540,13 @@ async function startTurn(convId, agent, text, attachments = []) {
   const need = !r.error && modeOf(conv) === 'chat'
     ? needWork({ text: partsText(msg.parts), denials: r.denials, permission: settings.agents[agent]?.permission }) : null;
   emitTo(conv, msg, { type: 'status', status: r.error ? (r.error === '已停止' ? 'stopped' : 'error') : 'done', error: r.error,
-    meta: { cost: r.cost, usage: r.usage }, ...(need ? { needWork: need } : {}) });
+    meta: { cost: r.cost, usage: r.usage, turn: usageOf(conv, agent, r, !!opts.sessionId) }, ...(need ? { needWork: need } : {}) });
   endError = r.error;
   } catch (e) {
     endError = e?.message || String(e);
     if (msg.status === 'running') emitTo(conv, msg, { type: 'status', status: 'error', error: endError });
   } finally {
+    for (const a of [...approvals.values()]) if (a.convId === convId) a.finish(false);
     if (job) endJob(job, endError);
     running.delete(convId);
     clearTimeout(saveTimers.get(convId)); saveTimers.delete(convId);
@@ -547,7 +590,7 @@ async function delegate({ conv: convId, agent, prompt, newSession }) {
   if (convs.get(convId) !== conv) { endJob(job, '已停止'); return { error: '已停止' }; }
   noteSize(conv, agent, r, resumed);
   sendMeta(conv);
-  emitTo(conv, msg, { type: 'delegate_end', id, error: r.error });
+  emitTo(conv, msg, { type: 'delegate_end', id, error: r.error, usage: usageOf(conv, agent, r, resumed) });
   endJob(job, r.error);
   if (ctx.job && ![...jobs.values()].some(j => j.convId === convId && j.role === 'delegate')) trackEvent(ctx.job, { type: 'delegate_end' });
   // 交回 Claude 的內容有上限：Claude 的 context 每一輪都要重送，太長很吃額度。
@@ -665,13 +708,14 @@ async function compress(convId, agent) {
 function startServer() {
   return new Promise(resolve => {
     const server = http.createServer((req, res) => {
-      if (req.method !== 'POST' || req.url !== '/delegate') { res.writeHead(404); return res.end(); }
+      if (req.method !== 'POST' || (req.url !== '/delegate' && req.url !== '/approve')) { res.writeHead(404); return res.end(); }
       let body = '';
       req.setEncoding('utf8');
       req.on('data', d => body += d);
       req.on('end', async () => {
         let data; try { data = JSON.parse(body); } catch { res.writeHead(400); return res.end(); }
         if (data.token !== token) { res.writeHead(403); return res.end(); }
+        if (req.url === '/approve') { const a = await askApproval(data); res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(a)); }
         const r = await delegate(data).catch(e => ({ error: e.message }));
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ text: r.text, error: r.error }));

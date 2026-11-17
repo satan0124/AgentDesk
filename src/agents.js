@@ -29,7 +29,7 @@ function short(v, n = 200) {
 }
 
 // ---------- 指令組成 ----------
-function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images = [], addDirs = [], allowedTools = [] }) {
+function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images = [], addDirs = [], allowedTools = [], permissionPromptTool }) {
   const base = resolveCli(cfg.cli || agent);
   if (!base) throw new Error(tr('找不到 {name} CLI：{cli}（請到設定檢查 CLI 路徑）', { name: labelOf(agent, cfg), cli: cfg.cli || agent }));
   const args = [];
@@ -67,7 +67,10 @@ function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, 
     if (cfg.effort) args.push('--effort', cfg.effort);
     if (sessionId) args.push('--resume', sessionId);
     if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
-    if (mcpConfig) args.push('--mcp-config', mcpConfig, '--allowedTools', ...allowedTools);
+    if (mcpConfig) args.push('--mcp-config', mcpConfig, ...(allowedTools.length ? ['--allowedTools', ...allowedTools] : []));
+    // 工作模式要問的工具（改檔、指令）改由這個 MCP 工具問使用者（AgentDesk 畫面上按允許／拒絕），不再一律拒絕；
+    // 2026-11 用真的 Claude 試過：參數是 { tool_name, input, tool_use_id }，回 {"behavior":"allow","updatedInput":…} 或 {"behavior":"deny","message":…}
+    if (permissionPromptTool && !cfg.readOnly) args.push('--permission-prompt-tool', permissionPromptTool);
   } else if (agent === 'codex') {
     args.push('exec');
     if (sessionId) args.push('resume', sessionId);
@@ -324,7 +327,7 @@ function antigravityParser(emit, state) {
 const PARSERS = { claude: claudeParser, codex: codexParser, cursor: cursorParser, gemini: geminiParser, antigravity: antigravityParser };
 
 // ---------- 執行 ----------
-function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt, env, onEvent, images, addDirs, allowedTools }) {
+function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt, env, onEvent, images, addDirs, allowedTools, permissionPromptTool }) {
   let child;
   const state = { texts: 0, streamed: false, hidden: new Set() };
   let collected = '';
@@ -341,7 +344,7 @@ function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt,
     ? Promise.race([explainModel(agent, cfg, r), stopped.then(() => r)]) : r));
   function start(resolve) {
     let cmd;
-    try { cmd = buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images, addDirs, allowedTools }); }
+    try { cmd = buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images, addDirs, allowedTools, permissionPromptTool }); }
     catch (err) { return resolve({ error: err.message, text: '' }); }
     const childEnv = { ...process.env, ...env };
     delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -418,6 +421,32 @@ function sessionSize(r, prev, resumed) {
   if (r?.kind === 'cursor') {
     const t = sum(u, ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens']);
     return t ? { tokens: Math.round(t / reqs) } : null;
+  }
+  return null;
+}
+
+// ---------- 這一輪用了多少（每則回覆顯示、對話加總） ----------
+// 各家回報方式（2026-11 用真的 CLI 看過）：
+//   Claude：result 的 usage 是這一輪；輸入＝新的＋寫入快取＋讀快取，費用是 total_cost_usd（API 牌價）
+//   Cursor：result 的 usage 是這一輪；輸入＝inputTokens＋快取讀寫
+//   Codex、Antigravity：usage 是整個 session 的累計 → 減掉上一輪記下的（prevRaw）。接續的 session 沒有上一輪的記錄就算不出來（total: null）
+//   其他格式：沒有量過，不顯示
+// 回傳 { input, output, total, cost?, raw? }（raw：累計型的這一輪原始值，主程序記下來給下一輪減）；沒有資料回 null
+function turnUsage(r, prevRaw, resumed) {
+  const u = r?.usage;
+  if (!u || typeof u !== 'object') return null;
+  const n = k => Number(u[k]) || 0;
+  const done = (input, output, extra = {}) => ({ input, output, total: input + output, ...(r.cost ? { cost: r.cost } : {}), ...extra });
+  if (r.kind === 'claude') return done(n('input_tokens') + n('cache_creation_input_tokens') + n('cache_read_input_tokens'), n('output_tokens'));
+  if (r.kind === 'cursor') return done(n('inputTokens') + n('cacheReadTokens') + n('cacheWriteTokens'), n('outputTokens'));
+  if (r.kind === 'codex' || r.kind === 'antigravity') {
+    const raw = { input: n('input_tokens'), output: n('output_tokens') };
+    if (!raw.input && !raw.output) return null;
+    // 接續的 session：減掉上一輪的累計；記錄比現在還大（中間換過 session）就當成新的
+    const fresh = !resumed || (prevRaw && (raw.input < prevRaw.input || raw.output < prevRaw.output));
+    if (fresh) return done(raw.input, raw.output, { raw });
+    if (!prevRaw) return { input: null, output: null, total: null, raw };
+    return done(raw.input - prevRaw.input, raw.output - prevRaw.output, { raw });
   }
   return null;
 }
@@ -527,6 +556,6 @@ function listModels(agent, cfg) {
   });
 }
 
-module.exports = { runAgent, listModels, readLimits, sessionSize, LABEL, labelOf };
+module.exports = { runAgent, listModels, readLimits, sessionSize, turnUsage, toolDetail, LABEL, labelOf };
 // 給 tools/validate.js 做單元測試用
 module.exports._test = { PARSERS, buildCommand, cursorModel, splitArgs, claudeWindows, codexWindows, parseModelRows, explainModel };
