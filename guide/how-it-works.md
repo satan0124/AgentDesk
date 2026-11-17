@@ -21,7 +21,9 @@ This is not a sandbox. Claude's editing tools (Edit, Write, MultiEdit, NotebookE
 
 When an agent needs to change a file in chat mode, it explains what it would change and **Switch to work mode and continue** appears under the reply. Clicking it switches the chat and lets the same agent carry on.
 
-**Approving actions as they happen (Claude only).** In work mode, when Claude's permission in Settings is **Accept edits automatically** or **Ask each time**, an action that needs permission (a command, or an edit under Ask each time) shows a card in the reply with **Allow** and **Deny**, and Claude waits for your answer. Pressing Stop or deleting the chat counts as Deny. This uses Claude Code's `--permission-prompt-tool` through AgentDesk's MCP bridge; Codex and Cursor have no equivalent in their non-interactive modes, so they keep their own permission settings.
+**Approving actions as they happen (Claude only).** In work mode, when Claude's permission is **Manual** (the default for new installs) or **Accept edits**, an action that needs permission (a command, or also an edit under Manual) shows a card in the reply with **Allow** and **Deny**, and Claude waits for your answer. Pressing Stop or deleting the chat counts as Deny. This uses Claude Code's `--permission-prompt-tool` through AgentDesk's MCP bridge; Codex and Cursor have no equivalent in their non-interactive modes, so they keep their own permission settings.
+
+The permission can also be set for one chat: open the model menu on the agent card in the right panel and pick one under **Permissions (this chat, work mode only)**. The card shows the permission in use; **Default** goes back to the setting. Chat mode stays read-only either way.
 
 A Cursor session that has run read-only cannot go back to writing, so when a chat switches to work mode AgentDesk starts a new Cursor session and passes the earlier chat along as context. Chats created before modes existed open in chat mode.
 

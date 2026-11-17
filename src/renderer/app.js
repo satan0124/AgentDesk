@@ -13,7 +13,7 @@ const EFFORTS = {
 // 強度選項：內建 Agent 用上表，自訂 Agent 用設定裡的「強度選項」（要有強度旗標）
 const effortsOf = a => (settings?.agents[a]?.custom ? Presets.effortList(settings.agents[a]) : EFFORTS[a] || []);
 const PERMS = {
-  claude: [['acceptEdits', '自動接受改檔（指令需另外允許）'], ['default', '逐項詢問（改檔與指令都先問你）'], ['auto', 'auto：由分類器判斷'], ['bypassPermissions', '全部放行（不詢問）'], ['plan', '只規劃不動手']],
+  claude: [['default', '手動：改檔與指令都先問你'], ['acceptEdits', '接受編輯：自動改檔，指令先問你'], ['auto', '自動：由分類器判斷'], ['plan', '規劃：只規劃不動手'], ['bypassPermissions', '略過權限確認：全部放行']],
   codex: [['workspace-write', '可寫工作資料夾'], ['read-only', '唯讀'], ['danger-full-access', '完全存取（危險）']],
   cursor: [['force', '自動執行指令（--force）'], ['trust', '只信任資料夾，不自動跑指令'], ['ask', '唯讀問答（ask）'], ['plan', '只規劃（plan）']],
 };
@@ -47,11 +47,21 @@ function effCfg(a, conv = current) {
   const o = conv?.agentCfg?.[a] || {};
   if (typeof o.model === 'string') c.model = o.model;
   if (typeof o.effort === 'string') c.effort = o.effort;
+  if (typeof o.permission === 'string') c.permission = o.permission;
+  if (typeof o.sandbox === 'string') c.sandbox = o.sandbox;
   return c;
+}
+// 權限設定放哪個欄位：Codex 是 sandbox，Claude、Cursor 是 permission；自訂 Agent 沒有
+const permKeyOf = a => (a === 'codex' ? 'sandbox' : 'permission');
+// 權限的短名稱（卡片那一行用）：「手動：改檔與指令都先問你」→「手動」
+function permShort(a, v) {
+  const hit = PERMS[a]?.find(([k]) => k === v);
+  return hit ? t(hit[1]).split(/[：:（(]/)[0].trim() : v;
 }
 function modelLine(a) {
   const c = effCfg(a);
-  return [c.model ? modelName(a, c.model) : t('預設模型'), c.effort ? t('強度 {effort}', { effort: c.effort }) : null].filter(Boolean).join(' · ');
+  const perm = PERMS[a] ? permShort(a, c[permKeyOf(a)] || PERMS[a][0][0]) : null;
+  return [c.model ? modelName(a, c.model) : t('預設模型'), c.effort ? t('強度 {effort}', { effort: c.effort }) : null, perm].filter(Boolean).join(' · ');
 }
 
 // ---------- 側欄 ----------
@@ -1135,7 +1145,7 @@ function renderAgentPanel() {
     const c = settings?.agents[a];
     const switchable = canSwitchModel(c);
     const model = !settings ? '' : switchable
-      ? `<button class="model-btn" data-model="${a}" title="${esc(t('切換這個對話用的模型與強度'))}"><span class="t">${esc(modelLine(a))}</span><span class="caret"></span></button>`
+      ? `<button class="model-btn" data-model="${a}" title="${esc(t('切換這個對話用的模型、強度與權限'))}"><span class="t">${esc(modelLine(a))}</span><span class="caret"></span></button>`
       : `<div class="model">${esc(modelLine(a))}</div>`;
     return `<div class="acard ${mine.length ? 'busy' : ''}" data-agent="${a}">
       <div class="acard-head"><span class="badge ${a}">${INITIAL[a]}</span><span class="nm">${LABEL[a]}</span>
@@ -1191,6 +1201,13 @@ function renderModelMenu() {
       <button data-e=""><span class="nm">${esc(t('預設（設定：{model}）', { model: base.effort || t('CLI 預設') }))}</span>${ck(typeof own.effort !== 'string')}</button>`
       + effortsOf(a).map(e => `<button data-e="${e}"><span class="nm">${e}</span>${ck(typeof own.effort === 'string' && eff.effort === e)}</button>`).join('');
   }
+  // 權限：只套用在這個對話的工作模式（對話模式一律唯讀）
+  if (PERMS[a]) {
+    const pk = permKeyOf(a), mine = typeof own[pk] === 'string';
+    html += `<hr><div class="sec">${esc(t('權限（只套用在這個對話的工作模式）'))}</div>
+      <button data-p=""><span class="nm">${esc(t('預設（設定：{model}）', { model: permShort(a, base[pk] || PERMS[a][0][0]) }))}</span>${ck(!mine)}</button>`
+      + PERMS[a].map(([v, label]) => `<button data-p="${v}" title="${esc(t(label))}"><span class="nm">${esc(t(label))}</span>${ck(mine && own[pk] === v)}</button>`).join('');
+  }
   m.innerHTML = html;
 }
 async function showModelMenu(a, btn) {
@@ -1230,6 +1247,7 @@ $('#modelMenu').addEventListener('click', e => {
   if ('cli' in b.dataset) setConvAgentCfg(a, { model: '' });
   else if ('m' in b.dataset) setConvAgentCfg(a, { model: b.dataset.m || null });
   else if ('e' in b.dataset) setConvAgentCfg(a, { effort: b.dataset.e || null });
+  else if ('p' in b.dataset) setConvAgentCfg(a, { [permKeyOf(a)]: b.dataset.p || null });
   hideModelMenu();
 });
 document.addEventListener('mousedown', e => { if (!e.target.closest('#modelMenu, .model-btn')) hideModelMenu(); }, true);

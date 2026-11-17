@@ -69,7 +69,7 @@ Delegated agents follow the chat's mode, so in chat mode the same read-only limi
 **Workflow and control**
 
 - Chat mode and work mode per chat (💬 / 🛠 at the top of the sidebar). AgentDesk asks first if another chat is already running in work mode in the same folder.
-- Pick the model and effort per chat from the agent card.
+- Pick the model, effort and permissions per chat from the agent card. Claude asks before edits and commands by default.
 - Each reply shows the tokens it used (and the cost when the CLI reports it); the right panel totals the chat.
 - In work mode Claude can stop and ask you to allow a command or edit.
 - The right panel shows each agent's status, session size and remaining quota, with **Restart**, plus **Compress** when a session gets large.

@@ -60,7 +60,7 @@ function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, 
   //   自訂 Agent 沒有共通旗標，上面已經 return，只能靠 prompt 裡的說明（mode.js）
   if (agent === 'claude') {
     args.push('-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--permission-mode', cfg.readOnly ? (cfg.permission === 'plan' ? 'plan' : 'default') : cfg.permission || 'acceptEdits');
+      '--permission-mode', cfg.readOnly ? (cfg.permission === 'plan' ? 'plan' : 'default') : cfg.permission || 'default');
     if (cfg.readOnly) args.push('--disallowedTools', CLAUDE_EDIT_TOOLS);
     if (addDirs.length) args.push('--add-dir', ...addDirs);
     if (cfg.model) args.push('--model', cfg.model);

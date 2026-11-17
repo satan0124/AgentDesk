@@ -138,6 +138,21 @@
   const useEl = [...document.querySelectorAll('#messages .msg.assistant')].at(-1)?.querySelector('.use-note');
   out.usage = { stored: n4.messages.at(-1).meta?.turn?.total === 75110, shown: /75\.1k tokens/.test(useEl?.textContent || '') && !/\$/.test(useEl?.textContent || ''),
     conv: /tokens/.test($('#convUsage').textContent), cost: usageHtml({ input: 1, output: 1, total: 2, cost: 0.5 }).includes('$0.50') && usageHtml({ input: 1, output: 1, total: 2, cost: 0.004 }).includes('$0.0040'), cjk: CJK.test((useEl?.textContent || '') + (useEl?.title || '') + $('#convUsage').textContent + $('#convUsage').title) };
+  // 3e3) 每個對話自己的權限：右欄 Claude 卡片的選單有「權限」一節，選了存在這個對話、卡片那一行顯示；選回預設就拿掉
+  const pmBtn = () => document.querySelector('#agentCards .model-btn[data-model="claude"]');
+  showModelMenu('claude', pmBtn());
+  const pmItems = [...document.querySelectorAll('#modelMenu [data-p]')];
+  const pmText = $('#modelMenu').innerText;
+  pmItems.find(b => b.dataset.p === 'bypassPermissions')?.click();
+  for (let i = 0; i < 20 && current.agentCfg?.claude?.permission !== 'bypassPermissions'; i++) await wait(100);
+  const pmSaved = (await api.getConv(mid)).agentCfg?.claude?.permission === 'bypassPermissions';
+  const pmLine = pmBtn()?.textContent || '';
+  showModelMenu('claude', pmBtn());
+  document.querySelector('#modelMenu [data-p=""]')?.click();
+  for (let i = 0; i < 20 && current.agentCfg?.claude?.permission; i++) await wait(100);
+  out.perm = { items: pmItems.length === 6, saved: pmSaved, line: pmLine.includes(permShort('claude', 'bypassPermissions')), reset: !(await api.getConv(mid)).agentCfg?.claude?.permission,
+    cjk: CJK.test(pmText + pmLine) };
+  hideModelMenu();
   // 超過門檻（10 萬 tokens）：提醒重開
   current.sizes = { ...current.sizes, xcc: { tokens: 123456 } };
   renderAgentPanel();

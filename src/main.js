@@ -41,7 +41,8 @@ const DEFAULT_SETTINGS = {
   delegation: true,
   context: 'standard',         // 附帶上下文：lean／standard／full（見 context.js）
   agents: {
-    claude: { enabled: true, cli: 'claude', model: '', effort: '', permission: 'acceptEdits' },
+    // 權限預設手動（default）：改檔、指令都先在畫面上問（見 needsApproval）。已經存過設定的照原本的
+    claude: { enabled: true, cli: 'claude', model: '', effort: '', permission: 'default' },
     // 新安裝只開 Claude；Codex、Cursor 由使用者在設定裡加入
     codex: { enabled: false, cli: 'codex', model: '', effort: '', sandbox: 'workspace-write' },
     cursor: { enabled: false, cli: 'agent', model: '', effort: '', permission: 'force' },
@@ -196,6 +197,9 @@ function cfgFor(conv, agent) {
   const o = conv?.agentCfg?.[agent] || {};
   if (typeof o.model === 'string') c.model = o.model;
   if (typeof o.effort === 'string') c.effort = o.effort;
+  // 這個對話自己選的權限（Claude、Cursor 是 permission，Codex 是 sandbox）；對話模式一律唯讀，不受影響
+  if (typeof o.permission === 'string') c.permission = o.permission;
+  if (typeof o.sandbox === 'string') c.sandbox = o.sandbox;
   c.readOnly = modeOf(conv) === 'chat';
   return c;
 }
@@ -342,7 +346,7 @@ async function envCheck(form, cwd) {
 // 工作模式、權限是「逐項詢問」或「自動接受改檔」時，Claude 要用需要許可的工具（指令、改檔）會先問：
 // bridge 打 /approve → 這裡在訊息裡放一張核准卡片、等使用者按 → 回給 bridge。停止或刪對話時一律拒絕
 const APPROVE_PERMS = ['default', 'acceptEdits'];
-const needsApproval = (conv, cfg) => modeOf(conv) === 'work' && APPROVE_PERMS.includes(cfg.permission || 'acceptEdits');
+const needsApproval = (conv, cfg) => modeOf(conv) === 'work' && APPROVE_PERMS.includes(cfg.permission || 'default');
 const approvals = new Map();   // id -> { convId, resolve }
 function askApproval({ conv: convId, tool_name: tool, input }) {
   const ctx = running.get(convId);
@@ -774,12 +778,12 @@ ipcMain.handle('conv:update', (_, id, patch) => {
   // 模式、釘選、封存不算對話有新動靜，不改排序用的更新時間
   if (typeof patch.pinned === 'boolean') c.pinned = patch.pinned;
   if (typeof patch.archived === 'boolean') { c.archived = patch.archived; if (c.archived) c.pinned = false; }
-  // 這個對話用的模型／強度：字串＝指定，null＝回到設定的預設
+  // 這個對話用的模型／強度／權限：字串＝指定，null＝回到設定的預設
   if (patch.agentCfg && typeof patch.agentCfg === 'object') {
     const all = { ...(c.agentCfg || {}) };
     for (const [a, v] of Object.entries(patch.agentCfg)) {
       const cur = { ...(all[a] || {}) };
-      for (const k of ['model', 'effort']) if (v && k in v) { if (typeof v[k] === 'string') cur[k] = v[k]; else delete cur[k]; }
+      for (const k of ['model', 'effort', 'permission', 'sandbox']) if (v && k in v) { if (typeof v[k] === 'string') cur[k] = v[k]; else delete cur[k]; }
       if (Object.keys(cur).length) all[a] = cur; else delete all[a];
     }
     c.agentCfg = all;

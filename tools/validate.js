@@ -1152,6 +1152,11 @@ async function e2eTests() {
   // 第二次啟動用同一個工作名：進程檔已經在，不能被新範本蓋掉
   if (rc) await check('畫面：同名的進程檔已存在時沿用、不覆蓋', () => assert(workFileEn && workFileOf() === workFileEn && rc.work?.saved && rc.work?.note,
     JSON.stringify({ same: workFileOf() === workFileEn, saved: rc.work?.saved, note: rc.work?.note })));
+  await check('畫面：右欄卡片可以替這個對話選權限，存在對話上、卡片顯示，選回預設就拿掉；新安裝的 Claude 預設手動', () => { const p = r.perm || {};
+    const main = readSrc('main.js'), ag = fs.readFileSync(path.join(SRC, 'agents.js'), 'utf8');
+    const defaults = main.includes("claude: { enabled: true, cli: 'claude', model: '', effort: '', permission: 'default' }") && ag.includes("cfg.permission || 'default')")
+      && main.includes("if (typeof o.permission === 'string') c.permission = o.permission;") && main.includes("APPROVE_PERMS.includes(cfg.permission || 'default')");
+    assert(p.items && p.saved && p.line && p.reset && p.cjk === false && defaults, JSON.stringify({ ...p, defaults })); });
   await check('畫面：每則回覆標題旁顯示這一輪的 tokens（有費用才顯示費用），右欄顯示這個對話的加總', () => { const u = r.usage || {};
     assert(u.stored && u.shown && u.conv && u.cost && u.cjk === false, JSON.stringify(u)); });
   await check('畫面：設定頁的環境檢查列出 Node.js、各 Agent、工作資料夾，有問題的附修法', () => { const v = r.env || {};
