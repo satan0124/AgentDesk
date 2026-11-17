@@ -42,7 +42,8 @@ function spawnProc(file, args, opts = {}) {
   p.killed = false;
   p.stdout = stream();
   p.stderr = stream();
-  p.stdin = { end: data => getWorker().postMessage({ type: 'stdin', id, data: data ?? '' }), on: () => {} };
+  p.stdin = { end: data => getWorker().postMessage({ type: 'stdin', id, data: data ?? '' }),
+    write: data => getWorker().postMessage({ type: 'write', id, data: data ?? '' }), on: () => {} };
   p.kill = () => { p.killed = true; getWorker().postMessage({ type: 'kill', id }); };
   procs.set(id, p);
   const { env, cwd } = opts;

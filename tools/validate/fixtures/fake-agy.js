@@ -1,5 +1,10 @@
 // 驗證用假 Antigravity CLI（agy）：stdin 讀一行 {"event":"user",...}，輸出 init / step_update / result
 // 格式依 https://antigravity.google/docs/cli/headless
+// `agy models`：第一行是說明，之後一行一個「id<Tab>名稱」
+if (process.argv.includes('models')) {
+  console.log('Fetching available models...\ngm\tGM (High)\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)');
+  process.exit(0);
+}
 let d = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', c => { d += c; }).on('end', () => {
@@ -10,6 +15,12 @@ process.stdin.on('data', c => { d += c; }).on('end', () => {
   // 每輪最後附的「索引」要求先拿掉（這個假 Agent 不寫索引）
   content = content.replace(/\n*\[AgentDesk (?:索引|index)[^\n]*\s*$/, '');
   const id = arg('--conversation') !== 'none' ? arg('--conversation') : 'conv-abc';
+  // 清單裡沒有的模型：照真的 CLI 的樣子回錯誤
+  if (!['none', 'gm', 'gemini-3.8-flash-high'].includes(arg('--model'))) {
+    ev({ event: 'result', result: { conversation_id: id, status: 'ERROR', error: `unknown model: ${arg('--model')}` } });
+    process.exitCode = 1;
+    return;
+  }
   ev({ event: 'init', conversation_id: id, init: { cwd: process.cwd(), tools: ['run_command'], permission_mode: 'always-proceed', model: arg('--model') } });
   // AgentDesk 請它寫索引（壓縮）：照格式回兩筆，前後各夾一行不合格式的話，看主程序挑不挑得出來。
   // conv= 寫的是收到的 --conversation（沒有接續 session 就是 none）；src/ghost.js 是逐字稿裡沒有的檔案，主程序核對時要拿掉

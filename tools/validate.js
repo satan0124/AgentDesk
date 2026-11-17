@@ -159,7 +159,7 @@ async function staticChecks() {
 // ======================================================================
 async function unitTests() {
   const agents = require(path.join(SRC, 'agents.js'));
-  const { PARSERS, buildCommand, splitArgs, claudeWindows, codexWindows } = agents._test;
+  const { PARSERS, buildCommand, splitArgs, claudeWindows, codexWindows, parseModelRows } = agents._test;
   const run = (kind, lines) => {
     const evs = [], state = { texts: 0, streamed: false, hidden: new Set() };
     const parse = PARSERS[kind](e => evs.push(e), state);
@@ -179,6 +179,31 @@ async function unitTests() {
     assert(r.text === 'Hello', `文字=${r.text}`);
     const tools = r.evs.filter(e => e.type === 'tool');
     assert(tools.length === 2 && tools.every(t => t.id === 'a'), `委派工具沒有隱藏：${JSON.stringify(tools)}`);
+  });
+
+  await check('模型清單：自訂 Agent 列模型輸出的解析', () => {
+    const rows = parseModelRows('Fetching available models...\n\x1b[1mgemini-3.8-flash-high\tGemini 3.8 Flash (High)\x1b[0m\r\nclaude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)\nModels:\nfoo-1 - Foo One (current)\nbar-2\n\n');
+    const ids = rows.map(r => r[0]).join(',');
+    assert(ids === 'gemini-3.8-flash-high,claude-opus-4-6-thinking,foo-1,bar-2', `id=${ids}`);
+    assert(rows[0][1] === 'Gemini 3.8 Flash (High)' && rows[1][1] === 'Claude Opus 4.6 (Thinking)' && rows[2][1] === 'Foo One' && rows[3][1] === 'bar-2', `名稱=${JSON.stringify(rows)}`);
+  });
+
+  await check('Antigravity：舊設定升級、模型預設由 CLI 決定、強度旗標', async () => {
+    const { upgradeCustom, effortList } = require(path.join(SRC, 'shared', 'presets.js'));
+    const old = upgradeCustom({ custom: true, format: 'antigravity', cli: 'agy', model: '', modelFlag: '--model' });
+    assert(old.modelsArgs === 'models' && old.model === '' && old.effort === 'high' && old.effortFlag === '--effort', `舊設定沒補齊：${JSON.stringify(old)}`);
+    assert(upgradeCustom({ custom: true, format: 'antigravity', model: 'gm' }).model === 'gm', '舊設定指定的模型被換掉');
+    const mine = { custom: true, format: 'antigravity', effortFlag: '--effort', model: '', effort: '', modelsArgs: '' };
+    assert(JSON.stringify(upgradeCustom(mine)) === JSON.stringify(mine), '升級過的設定（使用者清空的欄位）不能再被改');
+    assert(upgradeCustom({ custom: true, format: 'claude' }).model === undefined, '其他格式不升級');
+    assert(effortList(old).join() === 'low,medium,high,xhigh,max' && !effortList({ efforts: 'low high' }).length, `強度選項=${effortList(old)}`);
+    const cmd = buildCommand('x1', { ...old, cli: process.execPath, args: '' }, { prompt: 'hi', cwd: ROOT });
+    const s = cmd.args.join(' ');
+    assert(!s.includes('--model') && s.includes('--effort high'), `CLI 自己決定時不該帶 --model：${s}`);
+    const s2 = buildCommand('x1', { ...old, model: 'gm', cli: process.execPath, args: '' }, { prompt: 'hi', cwd: ROOT }).args.join(' ');
+    assert(s2.includes('--model gm'), `指令=${s2}`);
+    const r = { error: 'boom' };
+    assert(await agents._test.explainModel('x1', { ...old, model: '' }, r) === r, '沒指定模型不用查清單');
   });
 
   await check('額度：Claude rate_limit_event 與 Codex rateLimits 換算', () => {
@@ -794,6 +819,19 @@ async function integrationTests() {
     const r2 = await go(cfg, 'again', r1.sessionId);
     assert(/agy got: 多行 prompt "含引號"/.test(r1.text), `第一輪：${r1.error || r1.text}`);
     assert(r1.sessionId === 'conv-abc' && /conv=conv-abc/.test(r2.text), `接續：${r1.sessionId} / ${r2.text}`);
+  });
+  await check('執行：Antigravity 指定的模型失敗 → 重讀 agy models，不在清單就說明、請使用者重選', async () => {
+    const { listModels } = require(path.join(SRC, 'agents.js'));
+    const cfg = custom('fake-agy.js', { format: 'antigravity', promptMode: 'stream-json', modelFlag: '--model', effortFlag: '--effort', effort: 'high',
+      modelsArgs: `"${path.join(FIX, 'fake-agy.js')}" models` });
+    const L = await listModels('xt', cfg);
+    assert(L.models.join() === 'gm,gemini-3.8-flash-high' && L.labels.gm === 'GM (High)', `清單：${JSON.stringify(L)}`);
+    const ok = await go({ ...cfg, model: 'gm' }, 'hi');
+    assert(!ok.error && /agy got: hi/.test(ok.text), `可用的模型：${ok.error || ok.text}`);
+    const bad = await go({ ...cfg, model: 'gemini-4-hydrogen-high' }, 'hi');
+    assert(bad.modelUnavailable === 'gemini-4-hydrogen-high' && /unknown model/.test(bad.error) && /模型 gemini-4-hydrogen-high 不在/.test(bad.error) && !bad.text, `不可用的模型：${JSON.stringify(bad)}`);
+    const def = await go({ ...cfg, model: '' }, 'hi');
+    assert(!def.error && /agy got: hi/.test(def.text), `CLI 自己決定：${def.error || def.text}`);
   });
   await check('執行：Claude 相容格式回報用量 → session 大小取最後一個請求', async () => {
     const { sessionSize } = require(path.join(SRC, 'agents.js'));

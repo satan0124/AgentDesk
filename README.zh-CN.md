@@ -20,6 +20,7 @@ AgentDesk 把 Claude Code、Codex CLI、Cursor Agent CLI 和你自己设置的 C
 - **一段对话，几个 Agent。** 同一段对话里可以在 Claude Code、Codex、Cursor 之间切换。新的 Agent 没看过的内容，AgentDesk 会自动附上，不用自己复制粘贴。
 - **交出去的工作看得到。** Claude 可以把工作交给 Codex 或 Cursor，卡片上实时显示对方的步骤和结果。
 - **长对话也管得住。** 把越来越大的 session 压缩成可以查的索引，完整的对话留在有编号的逐字稿里。实测每个请求重发的 tokens 从 20.5 万～65.3 万降到 6.5 万以内。
+- **少花 token。** 每个 Agent 都能勾选“极度节省 token”规则：不写旁白、不重述，坏消息照讲。实测输出 tokens 少四成多，要翻很多文件的调查题总 tokens 少一半左右。
 - **跨 session 接着做。** 工作模式用进度文件记任务、决策和验证结果，换新对话或重开 session 都能接着做。
 - **讨论和动手分开。** 先在有改文件限制的对话模式讨论，准备好让 Agent 改文件时再切到工作模式。
 
@@ -81,13 +82,14 @@ git clone https://github.com/satan0124/AgentDesk.git
 
 更多细节见[运作方式](guide/how-it-works.zh-CN.md)。
 
-## 压缩实测
+## 实测
 
 <p align="center"><img src="assets/readme/compress-zh-CN.svg" width="740" alt="压缩前后每个请求重发的 tokens：146 条 Claude 52.3 万 → 6.5 万；96 条 Codex 20.5 万 → 3 万；40 条 Claude 65.3 万 → 6.1 万"></p>
 
 - 2026-11-15～16 拿三个真实的对话副本压缩：146 条（Claude）每个请求 52.3 万 → 5.8 万～6.5 万 tokens；96 条（Codex）20.5 万 → 2.5 万～3.0 万；40 条（Claude）65.3 万 → 5.7 万～6.1 万。压缩前有平均值的取平均，压缩后是实际观察到的范围。
 - 这三组是“边聊边记索引”加入之前测的。之后加上这个功能再测：真的 Claude、Codex 每一轮都写了索引行（22／22），早期细节 9 题全对，再压缩时只有加入功能之前的段落要请 Agent 补写。
 - token 数不等于费用：长 session 大多是比较便宜的缓存读取。每种情况只测过一两次。
+- “极度节省 token”规则（2026-11-17，Claude、Codex 各问 4 道题，规则关、开各跑 2 次）：输出 tokens 少 45%／44%，总 tokens 少 38%／18%。答案都正确，“只支持 Windows”“没实测”这类坏消息照讲；省得最多的是要翻很多文件的调查题。
 
 方法、完整数据和注意事项见[实测](guide/benchmarks.zh-CN.md)。
 
@@ -100,7 +102,7 @@ git clone https://github.com/satan0124/AgentDesk.git
 ## 文档
 
 - [运作方式](guide/how-it-works.zh-CN.md)：模式、委派、压缩、进度文件、数据位置、代码结构与验证。
-- [实测](guide/benchmarks.zh-CN.md)：所有压缩数据，含方法与注意事项。
+- [实测](guide/benchmarks.zh-CN.md)：压缩与“极度节省 token”规则的数据，含方法与注意事项。
 
 ## 许可
 

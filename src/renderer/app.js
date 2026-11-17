@@ -10,6 +10,8 @@ const EFFORTS = {
   codex: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   cursor: ['low', 'medium', 'high', 'xhigh'],
 };
+// 強度選項：內建 Agent 用上表，自訂 Agent 用設定裡的「強度選項」（要有強度旗標）
+const effortsOf = a => (settings?.agents[a]?.custom ? Presets.effortList(settings.agents[a]) : EFFORTS[a] || []);
 const PERMS = {
   claude: [['acceptEdits', '自動接受改檔（指令需另外允許）'], ['auto', 'auto：由分類器判斷'], ['bypassPermissions', '全部放行（不詢問）'], ['plan', '只規劃不動手']],
   codex: [['workspace-write', '可寫工作資料夾'], ['read-only', '唯讀'], ['danger-full-access', '完全存取（危險）']],
@@ -257,7 +259,7 @@ function fillAssistant(node, m) {
   let html = `<div class="who"><span class="badge ${m.agent}">${INITIAL[m.agent]}</span>${LABEL[m.agent]}${m.ctxChars ? `<span class="model ctx-note" title="${esc(t('這一輪附上的先前對話字數，會算進這個 Agent 的用量；可在設定調整附帶量'))}">${esc(t('附上先前對話 {n} 字', { n: m.ctxChars.toLocaleString() }))}</span>` : ''}</div>`;
   html += renderParts(m.parts, m.id, m.status === 'running');
   if (m.status === 'running') html += `<div class="working"><span class="spinner"></span>${runningLabel(m)}</div>`;
-  if (m.status === 'error' && m.error) html += `<div class="errbox">${esc(t(m.error))}</div>${reloginHtml(m.agent, m.error)}`;
+  if (m.status === 'error' && m.error) html += `<div class="errbox">${esc(t(m.error))}</div>${reloginHtml(m.agent, m.error)}${pickModelHtml(m.agent, m.error)}`;
   if (m.status === 'stopped') html += `<div class="stopped">■ ${esc(t(m.error || '已停止'))}</div>`;
   // 對話模式下 Agent 想改檔：只在最後一則訊息上問，顯示與否由 renderMode 依目前模式決定
   if (m.needWork && current?.messages.at(-1)?.id === m.id) {
@@ -377,7 +379,7 @@ function partHtml(p, k, live) {
     const st = t({ running: '執行中…', done: '完成', error: '失敗', stopped: '已停止' }[p.status] || p.status);
     return `<details class="part delegate ${p.agent}" data-key="${k}" ${p.status === 'running' ? 'data-running' : ''}>
         <summary><span class="badge ${p.agent}">${INITIAL[p.agent]}</span><b>${esc(t('交給 {name}', { name: LABEL[p.agent] }))}</b><span class="dstate ${p.status}">${st}</span></summary>
-        <div class="dbody"><div class="dprompt">${esc(p.prompt)}</div>${renderParts(p.parts, k, live)}${p.error && p.status !== 'stopped' ? `<div class="errbox">${esc(t(p.error))}</div>${reloginHtml(p.agent, p.error)}` : ''}</div></details>`;
+        <div class="dbody"><div class="dprompt">${esc(p.prompt)}</div>${renderParts(p.parts, k, live)}${p.error && p.status !== 'stopped' ? `<div class="errbox">${esc(t(p.error))}</div>${reloginHtml(p.agent, p.error)}${pickModelHtml(p.agent, p.error)}` : ''}</div></details>`;
   }
   return '';
 }
@@ -781,6 +783,23 @@ function reloginHtml(agentId, error) {
   if (!error || !AUTH_ERR.test(error) || !settings?.agents[agentId]) return '';
   return `<button class="btn relogin" data-relogin="${agentId}">${esc(t('重新登入 {name}', { name: LABEL[agentId] }))}</button>`;
 }
+// 自訂 Agent 執行失敗、模型不在重讀的清單裡（agents.js 的 explainModel）：錯誤下面放「選擇模型」，打開右欄的模型選單
+const MODEL_ERR_KEY = '模型 {model} 不在 {name} 目前的模型清單裡。請在右欄或設定裡重新選擇，AgentDesk 不會自動換模型。';
+const MODEL_ERR = new RegExp([MODEL_ERR_KEY, I18n.EN[MODEL_ERR_KEY], I18n.CN[MODEL_ERR_KEY]].filter(Boolean)
+  .map(s => s.replace(/\{(name|model)\}/g, '\0').replace(/[.*+?^${}()|[\]\\]/g, '\\$&').split('\0').join('.+')).join('|'));
+function pickModelHtml(agentId, error) {
+  if (!error || !MODEL_ERR.test(error) || !canSwitchModel(settings?.agents[agentId])) return '';
+  return `<button class="btn relogin" data-pickmodel="${agentId}">${esc(t('選擇 {name} 的模型', { name: LABEL[agentId] }))}</button>`;
+}
+$('#messages').addEventListener('click', e => {
+  const b = e.target.closest('[data-pickmodel]');
+  if (!b) return;
+  e.stopPropagation();
+  const a = b.dataset.pickmodel;
+  setPanel(true);
+  const btn = document.querySelector(`.model-btn[data-model="${a}"]`);
+  if (btn) showModelMenu(a, btn);
+});
 $('#messages').addEventListener('click', async e => {
   const b = e.target.closest('[data-relogin]');
   if (!b) return;
@@ -989,7 +1008,7 @@ function renderAgentPanel() {
         <div class="jt"><span class="role">${j.role === 'delegate' ? t('Claude 委派') : j.role === 'compress' ? t('壓縮') : t('主對話')}</span><span class="t">${esc(j.prompt)}</span><span class="tm">${elapsed(Date.now() - j.startedAt)}</span></div>
         <div class="act">${esc(t(j.activity))}</div></div>`).join('');
     const c = settings?.agents[a];
-    const switchable = c && !c.custom;
+    const switchable = canSwitchModel(c);
     const model = !settings ? '' : switchable
       ? `<button class="model-btn" data-model="${a}" title="${esc(t('切換這個對話用的模型與強度'))}"><span class="t">${esc(modelLine(a))}</span><span class="caret"></span></button>`
       : `<div class="model">${esc(modelLine(a))}</div>`;
@@ -1023,10 +1042,15 @@ function renderModelMenu() {
   if (!a || !current) return;
   const base = settings.agents[a], eff = effCfg(a), L = modelLists[a];
   const ck = on => on ? '<span class="ck">✓</span>' : '';
-  const item = id => `<button data-m="${esc(id)}" title="${esc(id)}"><span class="nm">${esc(modelName(a, id))}</span>${ck(eff.model === id)}</button>`;
+  // 清單讀到了、但設定或對話指定的模型不在裡面：標「尚未確認可用」，不當成清單裡的模型
+  const known = L ? [...L.models, ...(L.more || [])] : null;
+  const unc = id => !!(known && id && !known.includes(id));
+  const shown = id => (unc(id) ? t('{model}（尚未確認可用）', { model: modelName(a, id) }) : modelName(a, id));
+  const item = id => `<button data-m="${esc(id)}" title="${esc(id)}"><span class="nm${unc(id) ? ' unc' : ''}">${esc(shown(id))}</span>${ck(eff.model === id)}</button>`;
   const own = current.agentCfg?.[a] || {};
   let html = `<div class="sec">${esc(t('模型（只套用在這個對話）'))}</div>
-    <button data-m=""><span class="nm">${esc(t('預設（設定：{model}）', { model: base.model ? modelName(a, base.model) : t('CLI 預設') }))}</span>${ck(typeof own.model !== 'string')}</button>`;
+    <button data-m=""><span class="nm${unc(base.model) ? ' unc' : ''}">${esc(t('預設（設定：{model}）', { model: base.model ? shown(base.model) : t('CLI 預設') }))}</span>${ck(typeof own.model !== 'string')}</button>
+    <button data-cli><span class="nm">${esc(t('CLI 自己決定'))}</span>${ck(own.model === '')}</button>`;
   if (!L) html += `<div class="sec">${esc(modelErrors[a] ? t(modelErrors[a]) : t('讀取模型清單中…'))}</div>`;
   else {
     html += L.models.map(item).join('');
@@ -1034,12 +1058,13 @@ function renderModelMenu() {
       html += `<button data-more class="more">${esc(t('更多模型'))}<span class="chev${modelMenuMore ? ' open' : ''}"></span></button>`;
       if (modelMenuMore) html += `<div class="sub">${L.more.map(item).join('')}</div>`;
     }
-    if (eff.model && typeof own.model === 'string' && ![...L.models, ...(L.more || [])].includes(eff.model)) html += item(eff.model);
+    if (own.model && !known.includes(own.model)) html += item(own.model);
   }
-  if (EFFORTS[a]) {
+  if (a !== 'claude') html += `<button data-reload class="more">${esc(t('重新讀取模型清單'))}</button>`;
+  if (effortsOf(a).length) {
     html += `<hr><div class="sec">${esc(t('強度'))}</div>
       <button data-e=""><span class="nm">${esc(t('預設（設定：{model}）', { model: base.effort || t('CLI 預設') }))}</span>${ck(typeof own.effort !== 'string')}</button>`
-      + EFFORTS[a].map(e => `<button data-e="${e}"><span class="nm">${e}</span>${ck(typeof own.effort === 'string' && eff.effort === e)}</button>`).join('');
+      + effortsOf(a).map(e => `<button data-e="${e}"><span class="nm">${e}</span>${ck(typeof own.effort === 'string' && eff.effort === e)}</button>`).join('');
   }
   m.innerHTML = html;
 }
@@ -1072,7 +1097,13 @@ $('#modelMenu').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   const a = modelMenuAgent;
   if ('more' in b.dataset) { modelMenuMore = !modelMenuMore; return renderModelMenu(); }
-  if ('m' in b.dataset) setConvAgentCfg(a, { model: b.dataset.m || null });
+  if ('reload' in b.dataset) {
+    // 重跑 CLI 的列模型指令，不用之前讀到的清單
+    delete modelLists[a]; delete modelErrors[a]; renderModelMenu();
+    return loadModels(a).then(() => { if (modelMenuAgent === a) renderModelMenu(); });
+  }
+  if ('cli' in b.dataset) setConvAgentCfg(a, { model: '' });
+  else if ('m' in b.dataset) setConvAgentCfg(a, { model: b.dataset.m || null });
   else if ('e' in b.dataset) setConvAgentCfg(a, { effort: b.dataset.e || null });
   hideModelMenu();
 });
@@ -1157,7 +1188,7 @@ const CUSTOM_PRESETS = {
     title: 'Antigravity CLI（agy）', name: 'Antigravity', color: '#4f8ef7', cli: 'agy',
     args: '--output-format stream-json --input-format stream-json --dangerously-skip-permissions',
     promptMode: 'stream-json', promptFlag: '', format: 'antigravity', modelFlag: '--model', resumeFlag: '--conversation',
-    versionArgs: '--version', statusArgs: '', loginArgs: '*', installCmd: 'irm https://antigravity.google/cli/install.ps1 | iex',
+    ...Presets.ANTIGRAVITY, versionArgs: '--version', statusArgs: '', loginArgs: '*', installCmd: 'irm https://antigravity.google/cli/install.ps1 | iex',
     doc: 'https://antigravity.google/docs/cli/headless', description: 'Google Antigravity CLI (Gemini)',
   },
   claudejson: {
@@ -1171,6 +1202,9 @@ const CUSTOM_PRESETS = {
     versionArgs: '--version', statusArgs: '', loginArgs: '', installCmd: '', doc: '', description: '',
   },
 };
+// 自訂 Agent 有模型旗標、也設了列模型參數（舊設定由主程序的 upgradeCustom 補上），右欄才能切換模型
+const hasModelList = c => !!String(c?.modelsArgs || '').trim();
+const canSwitchModel = c => !!c && (!c.custom || (!!c.modelFlag?.trim() && hasModelList(c)));
 // Gemini CLI 已由 Antigravity CLI 取代，不再列出；舊設定還在用的才顯示
 const FORMATS = [['text', '純文字：stdout 直接當回覆（任何 CLI 都能用）'], ['claude', 'Claude 相容 stream-json（看得到工具與即時串流）'], ['antigravity', 'Antigravity CLI stream-json（agy）']];
 const formatsFor = cur => cur === 'gemini' ? [...FORMATS, ['gemini', 'Gemini CLI stream-json']] : FORMATS;
@@ -1194,6 +1228,7 @@ function renderAgentStyles() {
 function customSettingsHtml(a) {
   const c = form.agents[a];
   const v = k => esc(c[k] ?? '');
+  const effs = Presets.effortList(c);
   const opt = (list, cur) => list.map(([val, t]) => `<option value="${val}" ${cur === val ? 'selected' : ''}>${t}</option>`).join('');
   return `<section class="set-group custom" data-agent="${a}">
     <h3><span class="badge" style="background:${safeColor(c.color)}">${esc((c.name || '?').trim().charAt(0).toUpperCase())}</span>${esc(c.name || t('自訂 Agent'))}<span class="muted">${t('自訂')}</span><span class="spacer"></span>
@@ -1207,7 +1242,10 @@ function customSettingsHtml(a) {
       <select data-k="promptMode">${opt(trOpts([['stdin', '從 stdin 傳入'], ['arg', '接在參數最後'], ['stream-json', '一行 JSON 從 stdin 傳入（agy）']]), c.promptMode)}</select>
       <input data-k="promptFlag" value="${v('promptFlag')}" placeholder="${t('前面加的旗標，例如 -p（可空）')}"></div></label>
     <label class="row"><span>${t('輸出格式')}</span><select data-k="format">${opt(trOpts(formatsFor(c.format)), c.format)}</select></label>
-    <label class="row"><span>${t('預設模型')}</span><div class="inline"><input data-k="model" value="${v('model')}" placeholder="${t('留空＝CLI 預設')}"><input data-k="modelFlag" value="${v('modelFlag')}" placeholder="${t('模型旗標，例如 -m')}" class="narrow"></div></label>
+    <label class="row"><span>${t('預設模型')}</span><div class="inline">${hasModelList(c) ? modelFieldHtml(a, c) : `<input data-k="model" value="${v('model')}" placeholder="${t('留空＝CLI 預設')}">`}<input data-k="modelFlag" value="${v('modelFlag')}" placeholder="${t('模型旗標，例如 -m')}" class="narrow"></div></label>
+    <label class="row"><span>${t('強度')}</span><div class="inline">${effs.length
+      ? `<select data-k="effort"><option value="">${t('預設（CLI 自己決定）')}</option>${[...(c.effort && !effs.includes(c.effort) ? [c.effort] : []), ...effs].map(e => `<option value="${esc(e)}" ${c.effort === e ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select>`
+      : `<input data-k="effort" value="${v('effort')}" placeholder="${t('留空＝CLI 預設')}">`}<input data-k="effortFlag" value="${v('effortFlag')}" placeholder="${t('強度旗標，例如 --effort')}" class="narrow"></div></label>
     <label class="row"><span>${t('接續 session 旗標')}</span><input data-k="resumeFlag" value="${v('resumeFlag')}" placeholder="${t('例如 --resume；留空＝每次重開，自動附上對話記錄')}"></label>
     <label class="row"><span>${t('給 Claude 的說明')}</span><input data-k="description" value="${v('description')}" placeholder="${t('它擅長什麼，Claude 決定要不要委派時參考')}"></label>
     <label class="row check"><input type="checkbox" data-k="delegate" ${c.delegate !== false ? 'checked' : ''}><span>${t('讓 Claude 可以委派工作給它')}</span></label>
@@ -1215,6 +1253,8 @@ function customSettingsHtml(a) {
     <details class="adv"><summary>${t('進階：偵測、安裝、登入')}</summary>
       <label class="row"><span>${t('版本參數')}</span><input data-k="versionArgs" value="${v('versionArgs')}" placeholder="--version"></label>
       <label class="row"><span>${t('登入狀態參數')}</span><input data-k="statusArgs" value="${v('statusArgs')}" placeholder="${t('例如 auth status（可空）')}"></label>
+      <label class="row"><span>${t('列模型參數')}</span><input data-k="modelsArgs" value="${v('modelsArgs')}" placeholder="${t('例如 models（可空）；輸出一行一個模型')}"></label>
+      <label class="row"><span>${t('強度選項')}</span><input data-k="efforts" value="${v('efforts')}" placeholder="${t('例如 low medium high（空白分隔，可空）')}"></label>
       <label class="row"><span>${t('登入參數')}</span><input data-k="loginArgs" value="${v('loginArgs')}" placeholder="${t('例如 login；填 * 代表直接開啟互動模式登入')}"></label>
       <label class="row"><span>${t('安裝指令')}</span><input data-k="installCmd" value="${v('installCmd')}" placeholder="${t('PowerShell 指令，例如 npm install -g …')}"></label>
       <label class="row"><span>${t('說明網址')}</span><input data-k="doc" value="${v('doc')}" placeholder="https://…"></label>
@@ -1303,7 +1343,10 @@ function modelFieldHtml(a, c) {
   if (!L) return `<input data-k="model" value="${esc(c.model)}" placeholder="${t('留空＝CLI 預設')}"><button class="btn" data-load="${a}">${t('讀取清單')}</button>`;
   const opt = id => `<option value="${esc(id)}" ${c.model === id ? 'selected' : ''}>${esc(L.labels?.[id] && L.labels[id] !== id ? `${L.labels[id]}（${id}）` : id)}</option>`;
   const known = [...L.models, ...(L.more || [])];
-  return `<select data-k="model"><option value="">${t('預設（CLI 自己決定）')}</option>${c.model && !known.includes(c.model) ? opt(c.model) : ''}
+  // 設定的模型不在清單裡：標「尚未確認可用」
+  const unconfirmed = c.model && !known.includes(c.model)
+    ? `<option value="${esc(c.model)}" selected>${esc(t('{model}（尚未確認可用）', { model: c.model }))}</option>` : '';
+  return `<select data-k="model"><option value="">${t('預設（CLI 自己決定）')}</option>${unconfirmed}
     <optgroup label="${esc(t(L.more ? '常用' : '可用模型'))}">${L.models.map(opt).join('')}</optgroup>
     ${L.more?.length ? `<optgroup label="${esc(t('更多模型'))}">${L.more.map(opt).join('')}</optgroup>` : ''}</select>
     ${a === 'claude' ? '' : `<button class="btn" data-load="${a}">${t('重新讀取')}</button>`}`;
@@ -1449,7 +1492,9 @@ $('#settingsModal').onclick = async e => {
     const b = e.target; b.disabled = true; b.textContent = t('讀取中…');
     const r = await api.listModels(la, readSettingsForm().agents[la]);
     b.disabled = false; b.textContent = t('讀取清單');
-    if (r.models?.length) { modelLists[la] = r; renderAgentSettings(); }
+    // 重讀失敗就不留之前的清單（跟右欄的「重新讀取模型清單」一樣）
+    if (r.models?.length) modelLists[la] = r; else delete modelLists[la];
+    renderAgentSettings();
     $('#setMsg').textContent = r.error ? t('{name}：{error}', { name: LABEL[la], error: t(r.error) }) : t('{name}：{n} 個模型，點模型欄位可選', { name: LABEL[la], n: r.models.length + (r.more?.length || 0) });
     document.querySelector(`section[data-agent="${la}"] [data-k="model"]`)?.focus();
   }

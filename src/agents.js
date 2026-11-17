@@ -1,8 +1,7 @@
 // 三個 CLI Agent 的啟動與串流解析，統一成同一組事件：
 //   {type:'session', id} {type:'text', text} {type:'thinking', text}
 //   {type:'tool', id, name, detail, status, output?}
-const { spawn, execFile } = require('child_process');
-const { spawnProc } = require('./proc');
+const { spawnProc, runProc } = require('./proc');
 const { t: tr } = require('./shared/i18n');
 const { resolveCli, killTree } = require('./cli');
 
@@ -35,6 +34,7 @@ function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, 
   if (cfg.custom) {
     args.push(...splitArgs(cfg.args).map(a => a.split('{cwd}').join(cwd)));
     if (cfg.model && cfg.modelFlag) args.push(cfg.modelFlag, cfg.model);
+    if (cfg.effort && cfg.effortFlag) args.push(cfg.effortFlag, cfg.effort);
     if (sessionId && cfg.resumeFlag) args.push(cfg.resumeFlag, sessionId);
     if (cfg.promptMode === 'stream-json') {
       // agy 等：stdin 一行 JSON {"event":"user","message":{"content":"…"}}，避開命令列長度上限
@@ -317,7 +317,13 @@ function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt,
     if (e.type === 'session' && e.id) state.session = e.id;
     onEvent?.(e);
   };
-  const promise = new Promise((resolve) => {
+  // 自訂 Agent 照指定的模型直接跑；失敗了才重讀一次模型清單（不用快取），模型不在清單就在錯誤後面說明，請使用者自己重選
+  // 重讀清單時按停止：不等列模型指令跑完，直接回原本的錯誤
+  let onStop;
+  const stopped = new Promise(res => { onStop = res; });
+  const promise = new Promise(start).then(r => (r.error && r.error !== '已停止' && !state.stopped
+    ? Promise.race([explainModel(agent, cfg, r), stopped.then(() => r)]) : r));
+  function start(resolve) {
     let cmd;
     try { cmd = buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images, addDirs, allowedTools }); }
     catch (err) { return resolve({ error: err.message, text: '' }); }
@@ -356,8 +362,18 @@ function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt,
     });
     child.stdin.on('error', () => {});
     child.stdin.end(cmd.stdin ?? '', 'utf8');
-  });
-  return { promise, stop: () => { state.stopped = true; killTree(child); } };
+  }
+  return { promise, stop: () => { state.stopped = true; killTree(child); onStop(); } };
+}
+
+// ---------- 自訂 Agent 執行失敗時：模型還在不在清單裡 ----------
+// 讀得到清單、而且指定的模型不在裡面，才補一段說明；讀不到清單就只留原本的錯誤
+async function explainModel(agent, cfg, r) {
+  if (!cfg?.custom || !cfg.model || !String(cfg.modelsArgs || '').trim()) return r;
+  const L = await listModels(agent, cfg).catch(() => null);
+  if (!L?.models?.length || L.models.includes(cfg.model)) return r;
+  return { ...r, modelUnavailable: cfg.model,
+    error: `${r.error}\n${tr('模型 {model} 不在 {name} 目前的模型清單裡。請在右欄或設定裡重新選擇，AgentDesk 不會自動換模型。', { name: labelOf(agent, cfg), model: cfg.model })}` };
 }
 
 // ---------- session 大小 ----------
@@ -413,14 +429,14 @@ function codexRpc(cfg, method, params, ms = 20000) {
   return new Promise(resolve => {
     const base = resolveCli(cfg?.cli || 'codex');
     if (!base) return resolve({ error: tr('找不到 CLI') });
-    const child = spawn(base[0], [...base.slice(1), 'app-server'], { windowsHide: true });
+    // 經 proc.js 的 worker 建立行程：主程序直接 spawn codex.exe 會卡住畫面
+    const child = spawnProc(base[0], [...base.slice(1), 'app-server']);
     let buf = '', done = false;
-    const finish = r => { if (done) return; done = true; clearTimeout(timer); killTree(child); resolve(r); };
-    const send = o => { try { child.stdin.write(JSON.stringify(o) + '\n'); } catch {} };
+    const finish = r => { if (done) return; done = true; clearTimeout(timer); child.kill(); resolve(r); };
+    const send = o => child.stdin.write(JSON.stringify(o) + '\n');
     const timer = setTimeout(() => finish({ error: tr('逾時') }), ms);
     child.on('error', e => finish({ error: e.message }));
-    child.stdin.on('error', () => {});
-    child.stdout.setEncoding('utf8');
+    child.on('close', code => finish({ error: tr('{name} 結束碼 {code}', { name: 'Codex app-server', code }) }));
     child.stdout.on('data', d => {
       buf += d;
       let i;
@@ -449,9 +465,32 @@ const CLAUDE_MORE = [['claude-fable-5-1', 'Fable 5.1'], ['claude-haiku-4-5', 'Ha
   ['claude-fable-5', 'Fable 5'], ['claude-opus-4-8', 'Opus 4.8'], ['claude-opus-4-7', 'Opus 4.7'], ['claude-opus-4-6', 'Opus 4.6'], ['claude-sonnet-4-6', 'Sonnet 4.6']];
 const CLAUDE_ALIAS = [['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['fable', 'Fable']];
 
+// 自訂 Agent 列模型指令的輸出：一行一個，「id<Tab>名稱」「id - 名稱」「id  名稱」或只有 id；
+// 開頭有空白分隔的說明行（例如 agy 的「Fetching available models...」）不算
+function parseModelRows(out) {
+  return stripAnsi(out || '').split(/\r?\n/).map(l => l.trim().match(/^([\w.\-\[\]=,:/@]+)(?:(?:\s*\t\s*|\s+-\s+|\s{2,})(.+?))?\s*(?:\((?:current|default)[^)]*\))?$/))
+    .filter(r => r && !r[1].endsWith(':')).map(r => [r[1], (r[2] || r[1]).trim()]);
+}
+
+// 跑 CLI 的列模型指令（經 proc.js 的 worker，主程序不卡），rows＝[[id, 名稱]]
+async function modelsFromCommand(base, args, parse) {
+  const r = await runProc(base[0], [...base.slice(1), ...args], { timeout: 30000 });
+  const rows = parse(r.stdout);
+  const why = r.code === -1 ? tr('逾時') : (stripAnsi(r.stderr || '').trim().split(/\r?\n/)[0] || '').slice(0, 200);
+  return { models: rows.map(x => x[0]), labels: Object.fromEntries(rows), error: rows.length ? null : (why || tr('讀不到模型清單')) };
+}
+
 function listModels(agent, cfg) {
   return new Promise(resolve => {
-    if (cfg?.custom) return resolve({ models: [], error: tr('自訂 Agent 沒有模型清單，請直接輸入模型名稱') });
+    if (cfg?.custom) {
+      // 舊的 Antigravity 設定已在載入時補上 modelsArgs（shared/presets.js 的 upgradeCustom）
+      const margs = String(cfg.modelsArgs || '').trim();
+      if (!margs) return resolve({ models: [], error: tr('自訂 Agent 沒有模型清單，請直接輸入模型名稱') });
+      const base = resolveCli(cfg.cli);
+      if (!base) return resolve({ models: [], error: tr('找不到 CLI') });
+      // 每次都重跑 CLI 的列模型指令，不留快取
+      return modelsFromCommand(base, splitArgs(margs), parseModelRows).then(resolve, err => resolve({ models: [], error: err.message }));
+    }
     if (agent === 'claude') {
       return resolve({ models: CLAUDE_MAIN.map(m => m[0]), more: CLAUDE_MORE.map(m => m[0]),
         labels: Object.fromEntries([...CLAUDE_MAIN, ...CLAUDE_MORE, ...CLAUDE_ALIAS]) });
@@ -459,12 +498,8 @@ function listModels(agent, cfg) {
     const base = resolveCli(cfg.cli || agent);
     if (!base) return resolve({ models: [], error: tr('找不到 CLI') });
     if (agent === 'cursor') {
-      execFile(base[0], [...base.slice(1), 'models'], { windowsHide: true, timeout: 30000, encoding: 'utf8' }, (err, out) => {
-        const rows = stripAnsi(out).split(/\r?\n/).map(l => l.match(/^([\w.\-\[\]=,]+)\s+-\s+(.+?)\s*(?:\((?:current|default)[^)]*\))?\s*$/)).filter(Boolean);
-        const models = rows.map(r => r[1]);
-        resolve({ models, labels: Object.fromEntries(rows.map(r => [r[1], r[2]])), error: models.length ? null : (err?.message || tr('讀不到模型清單')) });
-      });
-      return;
+      const parse = out => stripAnsi(out || '').split(/\r?\n/).map(l => l.match(/^([\w.\-\[\]=,]+)\s+-\s+(.+?)\s*(?:\((?:current|default)[^)]*\))?\s*$/)).filter(Boolean).map(r => [r[1], r[2]]);
+      return modelsFromCommand(base, ['models'], parse).then(resolve, err => resolve({ models: [], error: err.message }));
     }
     // codex：app-server JSON-RPC model/list
     codexRpc(cfg, 'model/list', { limit: 100, includeHidden: false }).then(r => {
@@ -478,4 +513,4 @@ function listModels(agent, cfg) {
 
 module.exports = { runAgent, listModels, readLimits, sessionSize, LABEL, labelOf };
 // 給 tools/validate.js 做單元測試用
-module.exports._test = { PARSERS, buildCommand, cursorModel, splitArgs, claudeWindows, codexWindows };
+module.exports._test = { PARSERS, buildCommand, cursorModel, splitArgs, claudeWindows, codexWindows, parseModelRows, explainModel };

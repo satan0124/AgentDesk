@@ -30,6 +30,10 @@ parentPort.on('message', msg => {
   } else if (type === 'stdin') {
     const child = children.get(id);
     if (child) child.stdin.end(msg.data ?? '', 'utf8');
+  } else if (type === 'write') {
+    // 不關 stdin 的寫入（Codex app-server 這類一問一答的 JSON-RPC）
+    const child = children.get(id);
+    if (child) try { child.stdin.write(msg.data ?? '', 'utf8'); } catch {}
   } else if (type === 'kill') {
     const child = children.get(id);
     if (!child || child.exitCode !== null) return;

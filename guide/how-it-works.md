@@ -85,6 +85,15 @@ The right panel shows the current chat only: whether each agent is idle or worki
 
 To add Antigravity CLI: pick **Antigravity CLI (agy)** → **+ Add agent** → **Install**, then **Sign in** (an interactive `agy` opens; finish its sign-in wizard and close it), then save.
 
+If a custom agent's CLI can list its models, put that subcommand in **List-models args** under the advanced section (the Antigravity template uses `models`; the output needs one model per line). Settings can then load the list, and the right panel can switch the model for one chat. The right panel also needs a model flag. With an effort flag and **Effort options**, the effort can be switched the same way.
+
+The Antigravity template leaves the model to the CLI by default (no `--model`) and sets effort to `high`; the models you can pick are whatever `agy models` prints. Antigravity agents saved by older versions get the list-models and effort settings when AgentDesk starts; a model they already chose is kept.
+
+- The model pickers in Settings and the right panel always offer **Let the CLI decide**.
+- A model set in Settings or for a chat that is not on the list read is marked **not confirmed available**.
+- **Reload** runs `agy models` again every time instead of reusing an earlier list.
+- When a run fails, AgentDesk reads the list again. If the chosen model is not on it, the error gets an explanation and a **Choose a model for Antigravity** button. AgentDesk never switches to another model by itself.
+
 ## Where data lives
 
 `%APPDATA%\AgentDesk\`:

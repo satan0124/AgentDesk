@@ -79,6 +79,17 @@
     '選擇這個對話的工作資料夾': 'Choose the working folder for this chat',
     '最近': 'Recent',
     '開啟資料夾…': 'Open folder…',
+    '列模型參數': 'List-models args',
+    '例如 models（可空）；輸出一行一個模型': 'e.g. models (optional); one model per output line',
+    '強度選項': 'Effort options',
+    '例如 low medium high（空白分隔，可空）': 'e.g. low medium high (space-separated, optional)',
+    '強度旗標，例如 --effort': 'Effort flag, e.g. --effort',
+    '模型 {model} 不在 {name} 目前的模型清單裡。請在右欄或設定裡重新選擇，AgentDesk 不會自動換模型。':
+      'The model {model} is not in the current model list of {name}. Choose again in the right panel or in Settings; AgentDesk will not switch models for you.',
+    'CLI 自己決定': 'Let the CLI decide',
+    '{model}（尚未確認可用）': '{model} (not confirmed available)',
+    '重新讀取模型清單': 'Reload model list',
+    '選擇 {name} 的模型': 'Choose a model for {name}',
     // ---- 邊對話邊記索引（compress.js 的 noteAsk、頂列的壓縮確認） ----
     '[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼，跟上一輪是同一件事就照抄「{prev}」。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]':
       '[AgentDesk index: end your reply with one more line: {mark} topic｜outcome｜related files. Topic: a few words on what this turn was about; if it is the same matter as last turn, copy "{prev}" exactly. Outcome: what was settled (decisions, what changed, key numbers), or "TBD". Related files: file paths discussed, separated by "、", or "-". The user does not see this line.]',
@@ -560,6 +571,17 @@
     "選擇這個對話的工作資料夾": "选择这个对话的工作文件夹",
     "最近": "最近",
     "開啟資料夾…": "打开文件夹…",
+    "列模型參數": "列模型参数",
+    "例如 models（可空）；輸出一行一個模型": "例如 models（可空）；输出一行一个模型",
+    "強度選項": "强度选项",
+    "例如 low medium high（空白分隔，可空）": "例如 low medium high（空格分隔，可空）",
+    "強度旗標，例如 --effort": "强度标志，例如 --effort",
+    "模型 {model} 不在 {name} 目前的模型清單裡。請在右欄或設定裡重新選擇，AgentDesk 不會自動換模型。":
+      "模型 {model} 不在 {name} 当前的模型列表里。请在右栏或设置里重新选择，AgentDesk 不会自动换模型。",
+    "CLI 自己決定": "由 CLI 自己决定",
+    "{model}（尚未確認可用）": "{model}（尚未确认可用）",
+    "重新讀取模型清單": "重新读取模型列表",
+    "選擇 {name} 的模型": "选择 {name} 的模型",
     "[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼，跟上一輪是同一件事就照抄「{prev}」。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]":
       "[AgentDesk 索引：回复的最后另起一行，写 {mark} 主题｜结论｜相关文件。主题用几个字讲这一轮在谈什么，跟上一轮是同一件事就照抄“{prev}”。结论写定下来的事（决定、改了哪里、关键数字），没有就写“未定”。相关文件写谈到的文件路径，用“、”分开，没有就写“-”。这一行用户看不到。]",
     "[AgentDesk 索引：回覆的最後另起一行，寫 {mark} 主題｜結論｜相關檔案。主題用幾個字講這一輪在談什麼。結論寫定下來的事（決定、改了哪裡、關鍵數字），沒有就寫「未定」。相關檔案寫談到的檔案路徑，用「、」分開，沒有就寫「-」。這一行使用者看不到。]":

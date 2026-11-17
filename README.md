@@ -20,6 +20,7 @@ AgentDesk puts Claude Code, Codex CLI, Cursor Agent CLI and other CLI agents you
 - **One chat, several agents.** Switch between Claude Code, Codex and Cursor in the same conversation. AgentDesk passes along whatever the new agent missed, so you do not copy and paste.
 - **Delegate and see the work.** Claude can hand a task to Codex or Cursor. A card shows their steps and result as they happen.
 - **Keep long conversations manageable.** Compress a growing session into a searchable index while the full conversation stays available in a numbered transcript. In our tests, tokens re-sent per request went from 205,000–653,000 to under 65,000.
+- **Spend fewer tokens.** Turn on the "save tokens" rule for any agent: no narration or restating, while bad news is still reported. In our tests output tokens dropped by over 40%, and investigation questions that read many files used about half the total tokens.
 - **Continue work across sessions.** In work mode a progress file keeps tasks, decisions and verification results, so a new chat or a restarted session can pick up the work.
 - **Separate discussion from execution.** Start in chat mode with editing restrictions, then switch to work mode when you are ready to let agents modify files.
 
@@ -81,13 +82,14 @@ Delegated agents follow the chat's mode, so in chat mode the same read-only limi
 
 More detail: [How it works](guide/how-it-works.md).
 
-## Compression benchmark
+## Benchmarks
 
 <p align="center"><img src="assets/readme/compress-en.svg" width="740" alt="Tokens resent per request before and after compressing: 146 messages Claude 523k to 65k; 96 messages Codex 205k to 30k; 40 messages Claude 653k to 61k"></p>
 
 - Three real chats, compressed on copies on 2026-11-15 and 16: 146 messages (Claude) 523,000 → 58,000–65,000 tokens per request; 96 messages (Codex) 205,000 → 25,000–30,000; 40 messages (Claude) 653,000 → 57,000–61,000. Before values are averages where available; after values are observed ranges.
 - Those runs predate indexing as you chat. In later runs with it, real Claude and Codex wrote an index line on every turn (22 of 22), answered 9 of 9 questions about early details, and re-compressing needed an agent only for messages from before the feature.
 - Tokens are not cost: most of a long session is cheaper cache reads. Each case was measured once or twice.
+- The "save tokens" rule (2026-11-17; 4 questions each for Claude and Codex, run twice with the rule off and twice with it on): 45% / 44% fewer output tokens and 38% / 18% fewer total tokens. Every answer was correct, and bad news such as "Windows only" or "not tested" was still reported. Investigation questions that read many files saved the most.
 
 Method, all numbers and caveats: [benchmarks](guide/benchmarks.md).
 
@@ -100,7 +102,7 @@ Method, all numbers and caveats: [benchmarks](guide/benchmarks.md).
 ## Documentation
 
 - [How it works](guide/how-it-works.md): modes, delegation, compression, progress files, data location, code layout and validation.
-- [Benchmarks](guide/benchmarks.md): every compression measurement with method and caveats.
+- [Benchmarks](guide/benchmarks.md): compression and "save tokens" rule measurements, with method and caveats.
 
 ## License
 

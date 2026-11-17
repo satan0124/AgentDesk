@@ -85,6 +85,15 @@ flowchart LR
 
 加入 Antigravity CLI：選「Antigravity CLI（agy）」→「＋ 新增 Agent」→「安裝」，再按「登入」（會開一個互動模式的 `agy`，完成登入精靈後關掉），最後儲存。
 
+自訂 Agent 的 CLI 如果能列出模型，就在進階設定的「列模型參數」填那個子指令（Antigravity 範本預設 `models`，輸出要一行一個模型）。填了之後設定頁能讀取清單，右欄也能替單一對話切換模型；右欄切換還需要填模型旗標。填了強度旗標與「強度選項」，強度也能同樣切換。
+
+Antigravity 範本的模型預設「CLI 自己決定」（不帶 `--model`），強度預設 `high`，可選的模型照 `agy models` 的實際輸出列出。舊版存下的 Antigravity 設定，AgentDesk 啟動時會補上列模型參數與強度設定，原本指定的模型不動。
+
+- 設定頁和右欄的模型選單一定有「CLI 自己決定」。
+- 設定或對話指定的模型不在讀到的清單裡時，標成「尚未確認可用」。
+- 「重新讀取」每次都重跑 `agy models`，不用之前讀到的清單。
+- 執行失敗時，AgentDesk 會重讀一次清單。指定的模型不在清單裡，錯誤下面會多一段說明和「選擇 Antigravity 的模型」按鈕。AgentDesk 不會自己換成別的模型。
+
 ## 資料位置
 
 `%APPDATA%\AgentDesk\`：

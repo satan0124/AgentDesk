@@ -15,6 +15,7 @@ const { KEEP, compressPrompt, noteAsk, parseNote, noteEntries, noteHoles, parseS
 const i18n = require('./shared/i18n');
 const tr = i18n.t;
 const { applyEvent, partsText } = require('./shared/reduce');
+const { upgradeCustom } = require('./shared/presets');
 
 if (process.env.AGENTDESK_DATA) app.setPath('userData', process.env.AGENTDESK_DATA);
 const DATA = app.getPath('userData');
@@ -60,7 +61,7 @@ function loadSettings() {
     // 舊版設定沒有 enabled：當時三個都在用，保持啟用；自訂 Agent（custom: true）照原樣接在後面
     const builtin = Object.entries(DEFAULT_SETTINGS.agents)
       .map(([k, v]) => [k, { ...v, ...(s.agents?.[k] ? { enabled: true } : {}), ...(s.agents?.[k] || {}) }]);
-    const custom = Object.entries(s.agents || {}).filter(([k, v]) => v?.custom && !DEFAULT_SETTINGS.agents[k]);
+    const custom = Object.entries(s.agents || {}).filter(([k, v]) => v?.custom && !DEFAULT_SETTINGS.agents[k]).map(([k, v]) => [k, upgradeCustom(v)]);
     return { ...DEFAULT_SETTINGS, ...s, agents: Object.fromEntries([...builtin, ...custom]) };
   } catch { return JSON.parse(JSON.stringify(DEFAULT_SETTINGS)); }
 }
