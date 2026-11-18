@@ -9,7 +9,7 @@ const { clearCache, resolveCli } = require('./cli');
 const { runProc } = require('./proc');
 const connect = require('./connect');
 const { buildContext, delegateReply } = require('./context');
-const { MODES, modeOf, modeNotes, delegateTail, frugalNote, frugalPlace, needWork, stickyReadOnly, mustRestart } = require('./mode');
+const { MODES, modeOf, modeNotes, delegateTail, frugalNote, frugalPlace, choiceNote, parseChoices, needWork, stickyReadOnly, mustRestart } = require('./mode');
 const { DIR: WORK_DIR, makeWork, workPath, template, parseWork, workFromFile } = require('./work');
 const { transcript, entry } = require('./transcript');
 const { KEEP, compressPrompt, noteAsk, parseNote, noteEntries, noteHoles, parseState, resumeForIndex, chunkRanges, editedFiles, verifyIndex, parseIndex, indexLine, indexHead, indexLines, indexContext } = require('./compress');
@@ -99,7 +99,9 @@ function listConvs() {
     const id = f.slice(0, -5);
     const c = convs.get(id) || (() => { try { return JSON.parse(fs.readFileSync(path.join(CONV_DIR, f), 'utf8')); } catch { return null; } })();
     if (c) out.push({ id: c.id, title: c.title, updated: c.updated, cwd: c.cwd, mode: modeOf(c), running: running.has(c.id),
-      pinned: !!c.pinned, archived: !!c.archived, compressing: running.get(c.id)?.compress || null });
+      pinned: !!c.pinned, archived: !!c.archived, compressing: running.get(c.id)?.compress || null,
+      // 沒用過的新對話：畫面上不列出來，按「新對話」時沿用（app.js 的 isBlank、newConvIn）
+      blank: !c.messages?.length && !c.work && modeOf(c) === 'chat' && !Object.keys(c.agentCfg || {}).length && !c.pinned && !c.forkOf && c.title === '新對話' });
   }
   return out.sort((a, b) => b.updated - a.updated);
 }
@@ -218,6 +220,11 @@ function notesFor(conv, agent, role = 'main') {
   if (place === 'prefix') {
     notes.prefix = [frugalNote(tr), notes.prefix].filter(Boolean).join('\n');
     conv.ruled = { ...(conv.ruled || {}), [agent]: true };
+  }
+  // 回覆最後給使用者選的回答（mode.js 的 choiceNote）：只給主對話的 Agent，每一輪都帶
+  if (role === 'main') {
+    if (agent === 'claude') notes.system = [notes.system, choiceNote(tr)].filter(Boolean).join('\n\n');
+    else notes.prefix = [notes.prefix, choiceNote(tr)].filter(Boolean).join('\n');
   }
   return notes;
 }
@@ -540,10 +547,12 @@ async function startTurn(convId, agent, text, attachments = []) {
   // 取出這一輪的索引行存到訊息上（那一行在下面的 status 事件裡從文字拿掉）
   const note = parseNote(msg.parts.filter(p => p.kind === 'text').map(p => p.text).join('\n'));
   if (note) msg.note = note;
+  // 回覆最後給使用者選的回答：存在訊息上，畫面變成按鈕（那一行同樣在 status 事件裡從文字拿掉）
+  const choices = r.error ? null : parseChoices(msg.parts.filter(p => p.kind === 'text').map(p => p.text).join('\n'));
   // 對話模式：Agent 想改檔卻做不了（Claude 的拒絕記錄，或回覆裡約定的標記）→ 畫面出現「切到工作模式並繼續」
   const need = !r.error && modeOf(conv) === 'chat'
     ? needWork({ text: partsText(msg.parts), denials: r.denials, permission: settings.agents[agent]?.permission }) : null;
-  emitTo(conv, msg, { type: 'status', status: r.error ? (r.error === '已停止' ? 'stopped' : 'error') : 'done', error: r.error,
+  emitTo(conv, msg, { type: 'status', status: r.error ? (r.error === '已停止' ? 'stopped' : 'error') : 'done', error: r.error, ...(choices ? { choices } : {}),
     meta: { cost: r.cost, usage: r.usage, turn: usageOf(conv, agent, r, !!opts.sessionId) }, ...(need ? { needWork: need } : {}) });
   endError = r.error;
   } catch (e) {

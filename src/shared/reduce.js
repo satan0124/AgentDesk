@@ -19,6 +19,7 @@
     if (ev.type === 'context') { msg.ctxChars = ev.chars; return; }
     if (ev.type === 'status') {
       msg.status = ev.status; if (ev.error) msg.error = ev.error; if (ev.meta) msg.meta = ev.meta;
+      if (ev.choices) msg.choices = ev.choices;   // 回覆最後給使用者選的回答（按鈕、輸入框的建議回覆）
       // 對話模式下 Agent 想改檔：畫面依此顯示「切到工作模式並繼續」
       if (ev.needWork) msg.needWork = ev.needWork;
       cleanMark(msg.parts);
@@ -65,15 +66,20 @@
   // 標記單獨一行、內容寫在下一行（2026-11 實測 Cursor 會這樣寫）：下一行有「｜」就一起拿掉（同 compress.js 的 parseNote）
   const NOTE_LINE = /^[ \t>*_`-]*\[\[agentdesk:index\]\](?:[ \t`*_:：]*\r?\n[ \t]*(?=[^\n]*[｜|])[^\n]*|[^\n]*)\n?/gm;
   const NOTE_AT = /^[ \t>*_`-]*\[\[agentdesk:index\]\]/m;
+  // 回覆最後給使用者選的回答（見 mode.js 的 choiceNote）：主程序在回合結束時取出存到訊息上（msg.choices），畫面變成按鈕；這一行一樣不顯示
+  const CHOICES = '[[agentdesk:choices]]';
+  const CHOICE_LINE = /^[ \t>*_`-]*\[\[agentdesk:choices\]\](?:[ \t`*_:：]*\r?\n[ \t]*(?=[^\n]*[｜|])[^\n]*|[^\n]*)\n?/gm;
+  const CHOICE_AT = /^[ \t>*_`-]*\[\[agentdesk:choices\]\]/m;
   // live：還在串流時，連結尾「打到一半的標記」也先藏起來，免得閃一下；
   // 索引行寫在最後，串流中看到行首的標記就把它之後的都先藏起來（標記單獨一行時，下一行還沒打到「｜」前不會閃出來）
   function stripMark(text, live) {
     let s = String(text || '');
-    if (live && s.includes(NOTE)) { const at = s.search(NOTE_AT); if (at >= 0) s = s.slice(0, at); }
+    if (live) for (const [k, at] of [[NOTE, NOTE_AT], [CHOICES, CHOICE_AT]]) if (s.includes(k)) { const i = s.search(at); if (i >= 0) s = s.slice(0, i); }
     if (s.includes(NOTE)) s = s.replace(NOTE_LINE, '').replace(/\s+$/, '');
+    if (s.includes(CHOICES)) s = s.replace(CHOICE_LINE, '').replace(/\s+$/, '');
     // 標記單獨一行：整行拿掉；行首標記後面還有字：只拿掉標記
     if (hasMark(s)) return s.replace(/^[ \t>*_`-]*\[\[agentdesk:work\]\][ \t`*_]*(\r?\n|$)/gm, '').replace(MARK_AT, '$1').replace(/\s+$/, '');
-    if (live) for (const k of [MARK, NOTE]) for (let n = k.length - 1; n >= 2; n--) if (s.endsWith(k.slice(0, n))) return s.slice(0, -n);
+    if (live) for (const k of [MARK, NOTE, CHOICES]) for (let n = k.length - 1; n >= 2; n--) if (s.endsWith(k.slice(0, n))) return s.slice(0, -n);
     return s;
   }
   function cleanMark(parts) {
@@ -87,7 +93,7 @@
     return (parts || []).map(p => (p.kind === 'text' ? p.text : p.kind === 'delegate' ? partsText(p.parts) : '')).join('\n');
   }
 
-  const api = { applyEvent, MARK, NOTE, hasMark, stripMark, partsText };
+  const api = { applyEvent, MARK, NOTE, CHOICES, hasMark, stripMark, partsText };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Reduce = api;
 })(this);

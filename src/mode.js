@@ -1,7 +1,7 @@
 // 對話／工作模式：每個對話各自記在 conv.mode。
 //   chat（對話）：問問題、討論、查資料，Agent 唯讀
 //   work（工作）：照設定頁的權限
-const { MARK, hasMark } = require('./shared/reduce');
+const { MARK, hasMark, CHOICES } = require('./shared/reduce');
 const { workNote } = require('./work');
 const MODES = ['chat', 'work'];
 // 沒傳翻譯函式時（單元測試）照樣代入 {mark}
@@ -92,4 +92,24 @@ function mustRestart({ agent, mode, told, permission }) {
   return mode === 'work' && told === 'chat' && stickyReadOnly(agent) && (permission || 'force') === 'force';
 }
 
-module.exports = { MODES, modeOf, modeNotes, delegateTail, frugalNote, frugalPlace, needWork, stickyReadOnly, mustRestart };
+// 回覆最後要使用者做決定時，請 Agent 另起一行列出幾個可以直接回的回答：畫面變成按鈕，第一個也是輸入框的建議回覆（Tab 套用）。
+// 只給主對話的 Agent（委派的是回給 Claude，不是回給使用者）；Claude 放 system prompt，其他放 prompt 最前面
+function choiceNote(tr = same) {
+  return tr('[AgentDesk 選項：回覆最後如果要使用者做決定或回答，另起一行寫 {mark} 回答一｜回答二（2～4 個；每個是使用者會直接回你的一句話，15 字以內；最建議的放第一個）。沒有要問就不要寫。這一行會變成按鈕，使用者看不到原文。]', { mark: CHOICES });
+}
+// 從回覆裡取出選項（有好幾行就用最後一行；標記單獨一行時讀下一行）：['回答一', …]，最多 4 個；沒有回 null
+function parseChoices(text) {
+  let got = null;
+  const lines = String(text || '').split(/\r?\n/);
+  lines.forEach((raw, i) => {
+    const l = raw.replace(/^[ \t>*_`-]*/, '');
+    if (!l.startsWith(CHOICES)) return;
+    let body = l.slice(CHOICES.length).replace(/^[\s`*_]*[:：]?\s*/, '');
+    if (!body.trim() && /[｜|]/.test(lines[i + 1] || '')) body = lines[i + 1].trim();
+    const list = [...new Set(body.replace(/[`*_\s]+$/, '').split(/\s*[｜|]\s*/).map(s => s.trim().slice(0, 60)).filter(Boolean))].slice(0, 4);
+    if (list.length) got = list;
+  });
+  return got;
+}
+
+module.exports = { MODES, modeOf, modeNotes, delegateTail, frugalNote, frugalPlace, choiceNote, parseChoices, needWork, stickyReadOnly, mustRestart };

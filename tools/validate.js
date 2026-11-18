@@ -926,6 +926,19 @@ async function integrationTests() {
     assert(names.join() === 'ask_codex,ask_xabc', `工具：${names.join()}`);
   });
 
+  await check('選項：要求三語、取出（含標記單獨一行）、畫面拿掉；只給主對話的 Agent', () => {
+    const { choiceNote, parseChoices } = require(path.join(SRC, 'mode.js'));
+    const { stripMark } = require(path.join(SRC, 'shared', 'reduce.js'));
+    const { t, setLang } = require(path.join(SRC, 'shared', 'i18n.js'));
+    setLang('en'); const en = choiceNote(t); setLang('zh-CN'); const cn = choiceNote(t); setLang('zh-TW');
+    assert(choiceNote().includes('[[agentdesk:choices]]') && !CJK.test(en) && en.includes('[[agentdesk:choices]]') && cn.includes('用户'), en);
+    const txt = '要開始嗎？\n\n[[agentdesk:choices]] 好，開始｜先不用｜好，開始\n[[agentdesk:index]] t｜r｜-';
+    assert(JSON.stringify(parseChoices(txt)) === '["好，開始","先不用"]' && stripMark(txt) === '要開始嗎？' && parseChoices('a\n[[agentdesk:choices]]\n好｜不要')?.length === 2
+      && parseChoices('說明 `[[agentdesk:choices]]` 的格式') === null && stripMark('ans\n[[agentdesk:choices]] a｜b', true).trim() === 'ans', JSON.stringify(parseChoices(txt)));
+    const main = readSrc('main.js');
+    assert(/if \(role === 'main'\) \{\s*\n\s*if \(agent === 'claude'\) notes\.system = \[notes\.system, choiceNote\(tr\)\]/.test(main), '選項要求只該給主對話的 Agent');
+  });
+
   await check('逐字稿記下使用者允許或拒絕了什麼', async () => {
     const { entry } = require(path.join(SRC, 'transcript.js'));
     const e = entry({ role: 'assistant', agent: 'claude', ts: 1, parts: [{ kind: 'approval', tool: 'Bash', detail: 'npm test', status: 'allowed' }, { kind: 'approval', tool: 'Bash', detail: 'rm -rf x', status: 'denied' }] }, 3, { label: () => 'Claude' });
@@ -1032,7 +1045,7 @@ async function e2eTests() {
       JSON.stringify({ chars: c, notes: r.ctxNotes, setting: r.contextSetting }));
     return r.ctxNotes[0];
   });
-  await check('畫面：對話／工作模式（切換鈕在側欄「新對話」右邊、預設對話並帶唯讀說明、切換存進對話、再點已選的模式不跳視窗、執行中不能換、舊對話當對話）', () => { const m = r.mode || {};
+  await check('畫面：對話／工作模式（按鈕在輸入框左下並寫出目前模式、預設對話並帶唯讀說明、切換存進對話、再點已選的模式不跳視窗、執行中不能換、舊對話當對話）', () => { const m = r.mode || {};
     assert(m.buttons === 'chat,work' && m.place && m.initial && m.chatNote && m.enabled && m.saved && m.reclick && m.locked && m.workNoNote && m.back && m.newIsChat && m.legacy === 'chat' && m.legacyUi, JSON.stringify(m)); });
   await check('畫面：對話模式下 Agent 要改檔時出現按鈕，按了切到工作模式並由同一個 Agent 接著做', () => { const n = r.needWork || {};
     assert(n.flagged && n.stripped && n.shown && n.hiddenMark && n.cjk === false && n.switched && n.continued && n.workNote && n.gone, JSON.stringify(n)); });
@@ -1055,8 +1068,8 @@ async function e2eTests() {
     assert(f.on && f.off, JSON.stringify(f)); });
   await check('畫面：視窗縮小時頂列不疊到右欄（主欄不到 400 時只留標題與圖示）', () => { const [w1, w2, w3, w4] = r.topbar || [];
     assert([w1, w2, w3, w4].every(w => w && w.inside && w.apart), JSON.stringify(r.topbar));
-    // 寬的時候標題、工作名、資料夾、五顆圖示都在；窄的時候剩標題與五顆圖示
-    assert(!w1.tight && w1.shown === 8 && !w2.tight && w2.shown === 8 && w3.tight && w3.shown === 6 && w4.tight && w4.shown === 6, JSON.stringify(r.topbar));
+    // 寬的時候標題、工作名、資料夾、三顆圖示（壓縮、⋯、右欄）都在；窄的時候剩標題與三顆圖示
+    assert(!w1.tight && w1.shown === 6 && !w2.tight && w2.shown === 6 && w3.tight && w3.shown === 4 && w4.tight && w4.shown === 4, JSON.stringify(r.topbar));
     return `主欄 ${[w1, w2, w3, w4].map(w => w.main).join('／')}px`;
   });
   await check('畫面：右欄卡片顯示 session 大小、超過門檻提醒並多一顆壓縮、工作中壓灰、只讓一個 Agent 重開', () => { const z = r.size || {};
@@ -1152,11 +1165,21 @@ async function e2eTests() {
   // 第二次啟動用同一個工作名：進程檔已經在，不能被新範本蓋掉
   if (rc) await check('畫面：同名的進程檔已存在時沿用、不覆蓋', () => assert(workFileEn && workFileOf() === workFileEn && rc.work?.saved && rc.work?.note,
     JSON.stringify({ same: workFileOf() === workFileEn, saved: rc.work?.saved, note: rc.work?.note })));
+  await check('畫面：回覆最後的選項變成按鈕；輸入框提示第一個選項，Tab 填進去；按選項直接送給同一個 Agent', () => { const c = r.choices || {};
+    assert(c.stored && c.hidden && c.buttons && c.hint && c.tab && c.sent && c.kept && c.gone && c.cjk === false, JSON.stringify(c)); });
   await check('畫面：右欄卡片可以替這個對話選權限，存在對話上、卡片顯示，選回預設就拿掉；新安裝的 Claude 預設手動', () => { const p = r.perm || {};
     const main = readSrc('main.js'), ag = fs.readFileSync(path.join(SRC, 'agents.js'), 'utf8');
     const defaults = main.includes("claude: { enabled: true, cli: 'claude', model: '', effort: '', permission: 'default' }") && ag.includes("cfg.permission || 'default')")
       && main.includes("if (typeof o.permission === 'string') c.permission = o.permission;") && main.includes("APPROVE_PERMS.includes(cfg.permission || 'default')");
-    assert(p.items && p.saved && p.line && p.reset && p.cjk === false && defaults, JSON.stringify({ ...p, defaults })); });
+    assert(p.chatRo && p.workNoNote && p.items && p.split && p.saved && p.line && p.danger && p.checks && p.reset && p.cjk === false && defaults, JSON.stringify({ ...p, defaults })); });
+  await check('畫面：UX：沒用過的新對話沿用、不列出來；頂列「⋯」選單；模式選單；資訊列一行；視窗窄時收右欄、輸入框不爆框；設定頁每個 Agent 預設收起', () => { const u = r.ux || {};
+    const [wide, mid1000, narrow, back] = u.layout || [];
+    const lay = wide?.panel && wide.fits && !mid1000?.panel && mid1000.fits && !narrow?.panel && narrow.narrow && narrow.fits && narrow.main >= 400 && back?.panel && back.fits && !back.narrow;
+    assert(u.blankTop && u.blankHidden && u.blankReuse && u.blankShown && u.firstSkipsBlank && u.more && u.modeMenu && u.modeClosed && u.infoOneLine && lay && u.forced && u.folded && u.unfold
+      && u.moreCjk === false && u.modeCjk === false && u.panelTip === false && u.foldCjk === false, JSON.stringify(u));
+    return `主欄 ${(u.layout || []).map(l => l.main).join('／')}px`; });
+  if (rc) await check('畫面：UX：簡中介面的模式選單、「⋯」選單、設定頁標題沒有繁體字', () => { const u = rc.ux || {};
+    assert(u.moreCjk === false && u.modeCjk === false && u.panelTip === false && u.foldCjk === false, JSON.stringify(u)); });
   await check('畫面：每則回覆標題旁顯示這一輪的 tokens（有費用才顯示費用），右欄顯示這個對話的加總', () => { const u = r.usage || {};
     assert(u.stored && u.shown && u.conv && u.cost && u.cjk === false, JSON.stringify(u)); });
   await check('畫面：設定頁的環境檢查列出 Node.js、各 Agent、工作資料夾，有問題的附修法', () => { const v = r.env || {};

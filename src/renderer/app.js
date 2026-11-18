@@ -60,8 +60,24 @@ function permShort(a, v) {
 }
 function modelLine(a) {
   const c = effCfg(a);
-  const perm = PERMS[a] ? permShort(a, c[permKeyOf(a)] || PERMS[a][0][0]) : null;
-  return [c.model ? modelName(a, c.model) : t('預設模型'), c.effort ? t('強度 {effort}', { effort: c.effort }) : null, perm].filter(Boolean).join(' · ');
+  return [c.model ? modelName(a, c.model) : t('預設模型'), c.effort ? t('強度 {effort}', { effort: c.effort }) : null].filter(Boolean).join(' · ');
+}
+// 有安全疑慮的權限：卡片與選單用警告色、加 ⚠
+const DANGER_PERMS = { claude: ['bypassPermissions'], codex: ['danger-full-access'] };
+const isWorkConv = () => current?.mode === 'work';
+// 這個對話實際用的權限（短名稱）；對話模式一律唯讀
+function permLabel(a) {
+  if (!PERMS[a]) return null;
+  if (!isWorkConv()) return t('唯讀');
+  return permShort(a, effCfg(a)[permKeyOf(a)] || PERMS[a][0][0]);
+}
+// 卡片上的權限按鈕：工作模式才有（只改這個對話）。對話模式不放，右欄上方寫一次「所有 Agent 唯讀」（#modeNote）；
+// 留一個藏起來的按鈕佔位，refreshPermUi 換模式時才有東西可以換
+function permBtnHtml(a) {
+  if (!PERMS[a]) return '';
+  if (!isWorkConv()) return '<button class="perm-btn hidden" disabled></button>';
+  const v = effCfg(a)[permKeyOf(a)] || PERMS[a][0][0], danger = DANGER_PERMS[a]?.includes(v);
+  return `<button class="perm-btn${danger ? ' danger' : ''}" data-perm="${a}" title="${esc(t('切換這個對話在工作模式的權限'))}"><span class="pi">${danger ? '⚠' : '🔒'}</span><span class="t">${esc(permLabel(a))}</span><span class="caret"></span></button>`;
 }
 
 // ---------- 側欄 ----------
@@ -83,11 +99,13 @@ function convItem(c, sub) {
   return li;
 }
 
+// 沒用過的新對話（主程序的 listConvs 標 blank：沒訊息、沒工作名、沒改名）：不是目前開著的、也沒有草稿，就不列出來
+const isBlank = c => c.blank && !drafts[c.id];
 function renderList() {
   const q = $('#search').value.trim().toLowerCase();
   const ul = $('#convList'); ul.innerHTML = '';
   for (const b of $('#viewToggle').children) b.classList.toggle('on', b.dataset.view === sideView);
-  const match = c => !q || c.title.toLowerCase().includes(q) || t(c.title).toLowerCase().includes(q);
+  const match = c => (!isBlank(c) || c.id === current?.id) && (!q || c.title.toLowerCase().includes(q) || t(c.title).toLowerCase().includes(q));
   const live = convList.filter(c => !c.archived && match(c));
   const pinned = live.filter(c => c.pinned), rest = live.filter(c => !c.pinned);
   if (pinned.length) {
@@ -134,10 +152,14 @@ let menuConv = null, menuMsg = null, menuSel = '';
 function hideCtx() { $('#ctxMenu').classList.add('hidden'); menuConv = null; menuMsg = null; }
 // 選單上按了哪一項：訊息的選單（showMsgMenu）走 msgAction，對話清單的走 convAction
 const ctxPick = act => (menuMsg ? msgAction(act, menuMsg, menuSel) : convAction(act, menuConv));
-function showConvMenu(c, x, y) {
+// top：從頂列的「⋯」開的（目前這個對話），多一項重開 session，重新命名改在頂列的標題上
+let menuTop = false;
+function showConvMenu(c, x, y, top = false) {
   const items = c.archived
     ? [['unarchive', '取消封存', 'A'], ['rename', '重新命名', 'R'], ['delete', '刪除', 'D']]
     : [[c.pinned ? 'unpin' : 'pin', c.pinned ? '取消釘選' : '釘選', 'P'], ['rename', '重新命名', 'R'], ['archive', '封存', 'A'], ['delete', '刪除', 'D']];
+  if (top) items.splice(-1, 0, ['reset', '讓所有 Agent 重開 session', 'S']);
+  menuTop = top;
   const m = $('#ctxMenu');
   m.innerHTML = items.map(([act, label, key]) => `<button data-act="${act}" data-key="${key}"${act === 'delete' ? ' class="danger"' : ''}>${esc(t(label))}<kbd>${key}</kbd></button>`).join('');
   m.classList.remove('hidden');
@@ -147,11 +169,13 @@ function showConvMenu(c, x, y) {
   menuConv = c;
 }
 async function convAction(act, c) {
+  const top = menuTop;
   hideCtx();
   if (!c) return;
   if (act === 'pin' || act === 'unpin') await api.updateConv(c.id, { pinned: act === 'pin' });
   else if (act === 'archive' || act === 'unarchive') await api.updateConv(c.id, { archived: act === 'archive' });
-  else if (act === 'rename') renameInList(c);
+  else if (act === 'reset') await resetAllSessions();
+  else if (act === 'rename') top && current?.id === c.id ? editTitle() : renameInList(c);
   else if (act === 'delete') await deleteConvById(c.id, c.title);
 }
 function renameInList(c) {
@@ -221,12 +245,23 @@ async function openConv(id) {
   $('#input').focus();
 }
 
+// 已經有沒用過的新對話（目前這個優先）就沿用它、換到要的資料夾，不再多建一個
 async function newConvIn(cwd) {
-  const c = await api.createConv(cwd || settings.defaultCwd);
+  cwd = cwd || settings.defaultCwd;
+  const reuse = (current && !current.messages.length && convList.find(c => c.id === current.id && isBlank(c))) || convList.find(c => !c.archived && isBlank(c));
+  if (reuse) {
+    if (current?.id !== reuse.id) await openConv(reuse.id);
+    if (current?.id === reuse.id) await setCwd(cwd);
+    return;
+  }
+  const c = await api.createConv(cwd);
   await openConv(c.id);
 }
 const newConv = () => newConvIn(current?.cwd);
+// 啟動時開最近的那一個（沒用過的新對話也算：上次就停在那裡）
 const firstConv = () => convList.find(c => !c.archived) || convList[0];
+// 刪掉對話後要開的那一個：先挑側欄看得到的（沒用過的新對話不列，見 isBlank）
+const nextConv = () => convList.find(c => !c.archived && !isBlank(c)) || firstConv();
 
 // 壓縮中（主程序在跑寫索引的那一輪，見 main.js 的 compress）：{ agent, from, to }，沒有就是 null
 const compressState = () => (current && convList.find(c => c.id === current.id)?.compressing) || null;
@@ -235,12 +270,16 @@ function isRunning() { return !!current && (!!compressState() || current.message
 
 function renderConv() {
   $('#convTitle').textContent = current ? t(current.title) : '';
-  $('#cwdBtn').textContent = current ? current.cwd : '';
-  // 還沒開始聊的對話，輸入框上方顯示資料夾選單
+  // 頂列只顯示資料夾名稱，點了在檔案總管開啟；換資料夾只在輸入框上方（還沒開始聊的對話）
+  $('#cwdBtn').classList.toggle('hidden', !current);
+  $('#cwdBtn .t').textContent = current ? baseName(current.cwd) : '';
+  $('#cwdBtn').title = current ? t('工作資料夾：{cwd}\n點擊在檔案總管開啟', { cwd: current.cwd }) : '';
   $('#cwdPick').classList.toggle('hidden', !current || !!current.messages.length);
   $('#cwdPick .t').textContent = current ? baseName(current.cwd) : '';
   $('#cwdPickBtn').title = current ? current.cwd : '';
-  $('#cwdBtn').title = current ? t('工作資料夾：{cwd}\n點擊更換', { cwd: current.cwd }) : '';
+  // 還沒有訊息的對話：壓縮與「更多」用不到，先藏起來
+  $('#compressBtn').classList.toggle('hidden', !current?.messages.length);
+  $('#moreBtn').classList.toggle('hidden', !current?.messages.length);
   const box = $('#messages'); box.innerHTML = '';
   // 壓縮過的對話：在索引涵蓋到的那一則後面畫一條線，點了開啟索引檔
   const indexed = Math.min(current?.indexed || 0, current?.messages.length || 0);
@@ -277,6 +316,10 @@ function fillAssistant(node, m) {
   // 對話模式下 Agent 想改檔：只在最後一則訊息上問，顯示與否由 renderMode 依目前模式決定
   if (m.needWork && current?.messages.at(-1)?.id === m.id) {
     html += `<div class="need-work hidden"><div class="nw-text">${esc(t('{name} 需要修改檔案，但對話模式是唯讀的。', { name: LABEL[m.agent] }))}</div>${m.needWork.denied?.length ? `<div class="nw-list">${m.needWork.denied.map(esc).join('<br>')}</div>` : ''}<button class="btn primary" data-act="toWork">${esc(t('切到工作模式並繼續'))}</button></div>`;
+  }
+  // 回覆最後給使用者選的回答：只在最後一則、沒有在執行時顯示成按鈕，按了直接送給同一個 Agent
+  if (m.status === 'done' && m.choices?.length && current?.messages.at(-1)?.id === m.id) {
+    html += `<div class="choices">${m.choices.map(c => `<button class="btn choice" data-choice="${esc(c)}" data-agent="${esc(m.agent)}">${esc(c)}</button>`).join('')}</div>`;
   }
   if (m.status !== 'running') html += msgFootHtml(m);
   node.innerHTML = html;
@@ -468,6 +511,28 @@ api.on('conv:changed', async list => {
 api.on('chat:error', ({ convId, error }) => { if (current?.id === convId) alertBox(t(error)); });
 
 // ---------- 輸入 ----------
+// 輸入框下方那一行：模型、強度、實際的權限（對話模式顯示唯讀），Claude 再加上可委派給誰
+// 一行就好：模型 · 強度 · 權限；可委派給誰放在滑過的提示
+function agentInfoText() {
+  if (!settings) return '';
+  const p = permLabel(agent), danger = isWorkConv() && DANGER_PERMS[agent]?.includes(effCfg(agent)[permKeyOf(agent)]);
+  return [modelLine(agent), p && (danger ? '⚠ ' : '🔒 ') + p].filter(Boolean).join(' · ');
+}
+function agentInfoTip() {
+  if (!settings) return '';
+  const helperNames = enabledAgents().filter(a => a !== 'claude' && settings.agents[a].delegate !== false).map(a => LABEL[a]);
+  return agentInfoText() + (agent === 'claude' && settings.delegation && helperNames.length ? '\n' + t('可委派給 {names}', { names: helperNames.join(' / ') }) : '');
+}
+function renderAgentInfo() { $('#agentInfo').textContent = agentInfoText(); $('#agentInfo').title = agentInfoTip(); }
+// 換了對話／工作模式：右欄卡片的權限按鈕、右欄上方的唯讀說明、輸入框下方那一行跟著變（renderMode 會呼叫）
+function refreshPermUi() {
+  for (const card of document.querySelectorAll('#agentCards .acard')) {
+    const old = card.querySelector('.perm-btn');
+    if (old) old.outerHTML = permBtnHtml(card.dataset.agent);
+  }
+  $('#modeNote').classList.toggle('hidden', !current || isWorkConv());
+  renderAgentInfo();
+}
 function updateComposer() {
   const run = isRunning();
   const btn = $('#sendBtn');
@@ -476,8 +541,8 @@ function updateComposer() {
   btn.title = run ? t('停止') : t('送出');
   btn.disabled = !run && !$('#input').value.trim() && !pending.length;
   for (const b of $('#agentPicker').children) b.classList.toggle('on', b.dataset.agent === agent);
-  const helperNames = settings ? enabledAgents().filter(a => a !== 'claude' && settings.agents[a].delegate !== false).map(a => LABEL[a]) : [];
-  $('#agentInfo').textContent = settings ? modelLine(agent) + (agent === 'claude' && settings.delegation && helperNames.length ? t(' · 可委派 {names}', { names: helperNames.join(' / ') }) : '') : '';
+  renderAgentInfo();
+  updateSuggestion();
   renderMode();
   renderCompress();
   renderTaskTip();
@@ -572,20 +637,29 @@ $('#messages').addEventListener('click', async e => {
   if (info?.index) openLocal(info.index);
 });
 
-// ---------- 側欄右上：對話／工作模式（切換鈕在「新對話」右邊，管的是目前開著的這個對話） ----------
-// 對話＝唯讀，工作＝照設定頁的權限；每個對話各自記，執行中不能換（主程序也會擋）
+// ---------- 輸入框左下：對話／工作模式（管的是目前開著的這個對話） ----------
+// 對話＝唯讀，工作＝照右欄卡片的權限；每個對話各自記，執行中不能換（主程序也會擋）
+// 一顆按鈕寫出目前的模式，點了開選單；選單裡每項有說明
 function convMode(c) { return c?.mode === 'work' ? 'work' : 'chat'; }
+const MODE_UI = { chat: ['💬', '對話'], work: ['🛠', '工作'] };
+function closeModeMenu() { $('#modeMenu').classList.add('hidden'); $('#modeBtn').classList.remove('on'); }
 function renderMode() {
   const box = $('#modeToggle');
   box.classList.toggle('hidden', !current);
-  const run = !!isRunning();
-  for (const b of box.children) { b.classList.toggle('on', b.dataset.mode === convMode(current)); b.disabled = run; }
+  const run = !!isRunning(), m = convMode(current);
+  for (const b of box.querySelectorAll('[data-mode]')) { b.classList.toggle('on', b.dataset.mode === m); b.disabled = run; }
+  $('#modeBtn').disabled = run;
+  $('#modeBtn .mi').textContent = MODE_UI[m][0];
+  $('#modeBtn .t').textContent = t(MODE_UI[m][1]);
+  $('#modeBtn').title = t(m === 'work' ? '工作模式：開發專案或需求，Agent 可以改檔（照設定的權限）' : '對話模式：問問題、討論、查資料，Agent 不會改檔') + '\n' + t('點擊切換');
+  if (run) closeModeMenu();
   // 「切到工作模式並繼續」只在對話模式、沒有回合在跑時顯示
   for (const x of document.querySelectorAll('#messages .need-work')) x.classList.toggle('hidden', run || convMode(current) !== 'chat');
   // 工作模式且取了工作名：標題旁顯示工作名，點了開啟進程檔
   const chip = $('#workChip'), w = convMode(current) === 'work' ? current?.work : null;
   chip.classList.toggle('hidden', !w);
   if (w) { chip.textContent = w.name; chip.title = t('工作：{name}\n進程檔：{file}\n點擊開啟', { name: w.name, file: workFile() }); }
+  refreshPermUi();
 }
 // 進程檔的完整路徑（conv.work.file 是相對工作資料夾的路徑，用 / 分隔）
 function workFile(c = current) {
@@ -642,6 +716,8 @@ $('#workCancel').onclick = closeWorkPop;
 $('#workItems').onclick = e => { const b = e.target.closest('button[data-work]'); if (b) applyWork({ workFile: b.dataset.work }); };
 $('#workPickBtn').onclick = () => current && openWorkPop(null, $('#workPickBtn'));
 document.addEventListener('click', e => { if (!e.target.closest('#workPop, #modeToggle, #workPickBtn, .need-work')) closeWorkPop(); });
+document.addEventListener('click', e => { if (!e.target.closest('#modeToggle')) closeModeMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modeMenu').classList.contains('hidden')) closeModeMenu(); });
 
 // ---------- 工作現況（右欄）與新對話的「接續工作」 ----------
 // 進程檔由主程序讀（work:read）；開對話、回合結束、換工作時重讀，另外每 30 秒跟著右欄更新一次
@@ -720,8 +796,16 @@ async function continueInWork(a) {
   await go();
 }
 $('#modeToggle').onclick = async e => {
+  if (e.target.closest('#modeBtn')) {
+    e.stopPropagation();
+    if ($('#modeMenu').classList.contains('hidden') && current && !isRunning()) { $('#modeMenu').classList.remove('hidden'); $('#modeBtn').classList.add('on'); }
+    else closeModeMenu();
+    return;
+  }
   const m = e.target.closest('button')?.dataset.mode;
-  if (!m || !current || isRunning()) return;
+  if (!m) return;
+  closeModeMenu();
+  if (!current || isRunning()) return;
   // 點的是目前的模式：不做事（已經在工作模式時再點一次，不要跳出取工作名的視窗）
   if (m === convMode(current)) return;
   // 切到工作模式、還沒取工作名：先問
@@ -730,10 +814,37 @@ $('#modeToggle').onclick = async e => {
   renderMode();
 };
 
-async function submit() {
+// 按選項：換到回覆的那個 Agent，把選項當成使用者的話送出
+$('#messages').addEventListener('click', e => {
+  const b = e.target.closest('[data-choice]');
+  if (!b || isRunning() || !current) return;
+  e.stopPropagation();
+  if (settings.agents[b.dataset.agent]?.enabled) agent = b.dataset.agent;
+  // 只送選項本身：輸入框裡打到一半的字和待送的附件都留著
+  submit(b.dataset.choice);
+});
+// 輸入框的建議回覆：最後一則回覆有選項時，第一個就是建議；輸入框空著時顯示在提示字，按 Tab 填進去
+let suggestion = '', inputHint = null;
+function updateSuggestion() {
+  const input = $('#input');
+  if (inputHint === null) inputHint = input.placeholder;
+  const last = current?.messages.at(-1);
+  suggestion = !isRunning() && last?.role === 'assistant' && last.status === 'done' && last.choices?.[0] || '';
+  input.placeholder = suggestion ? t('{text}　（Tab 套用）', { text: suggestion }) : inputHint;
+  input.classList.toggle('suggest', !!suggestion);
+}
+$('#input').addEventListener('keydown', e => {
+  if (e.key !== 'Tab' || e.shiftKey || !suggestion || $('#input').value) return;
+  e.preventDefault();
+  $('#input').value = suggestion;
+  autoGrow();
+});
+// direct：直接送這段字（按回覆下面的選項），不動輸入框與待送的附件
+async function submit(direct) {
   if (isRunning()) return api.stop(current.id);
-  const text = $('#input').value.trim();
-  if (!text && !pending.length) return;
+  if (typeof direct !== 'string') direct = null;
+  const text = direct ?? $('#input').value.trim();
+  if (!text && (direct !== null || !pending.length)) return;
   if (!current) { const c = await api.createConv(settings.defaultCwd); current = c; }
   // 同一個資料夾已經有別的對話在工作模式執行：兩邊同時改檔可能互相蓋掉，先問（對話模式與壓縮只讀，不算）
   if (current.mode === 'work') {
@@ -741,6 +852,7 @@ async function submit() {
     const other = (await api.listConvs()).find(c => c.id !== current.id && c.running && !c.compressing && c.mode === 'work' && key(c.cwd) === key(current.cwd));
     if (other && !await confirmBox(t('「{title}」也在這個資料夾用工作模式執行中，兩邊同時改檔可能互相蓋掉。仍要送出嗎？', { title: t(other.title) }))) return;
   }
+  if (direct !== null) return api.send(current.id, agent, text, []);
   const atts = pending; pending = [];
   $('#input').value = '';
   delete drafts._new;
@@ -1145,12 +1257,12 @@ function renderAgentPanel() {
     const c = settings?.agents[a];
     const switchable = canSwitchModel(c);
     const model = !settings ? '' : switchable
-      ? `<button class="model-btn" data-model="${a}" title="${esc(t('切換這個對話用的模型、強度與權限'))}"><span class="t">${esc(modelLine(a))}</span><span class="caret"></span></button>`
+      ? `<button class="model-btn" data-model="${a}" title="${esc(t('切換這個對話用的模型與強度'))}"><span class="t">${esc(modelLine(a))}</span><span class="caret"></span></button>`
       : `<div class="model">${esc(modelLine(a))}</div>`;
     return `<div class="acard ${mine.length ? 'busy' : ''}" data-agent="${a}">
       <div class="acard-head"><span class="badge ${a}">${INITIAL[a]}</span><span class="nm">${LABEL[a]}</span>
         <span class="st ${mine.length ? 'busy' : ''}">${mine.length ? (mine.length > 1 ? t('工作中 ×{n}', { n: mine.length }) : t('工作中')) : t('閒置')}</span></div>
-      ${model}${sessionHtml(a)}${quotaHtml(a)}${jobs}</div>`;
+      ${model}${permBtnHtml(a)}${sessionHtml(a)}${quotaHtml(a)}${jobs}</div>`;
   }).join('');
   const fin = agentStatus.finished.filter(j => j.convId === cid).slice(0, 12);
   const icon = { done: '✓', error: '✕', stopped: '■' };
@@ -1163,7 +1275,7 @@ function renderAgentPanel() {
 api.on('agents:status', st => { agentStatus = st; renderAgentPanel(); });
 
 // ---------- 右欄卡片：切換這個對話的模型與強度 ----------
-let modelMenuAgent = null, modelMenuMore = false;
+let modelMenuAgent = null, modelMenuMore = false, modelMenuKind = 'model';   // kind：model（模型與強度）或 perm（權限）
 const modelErrors = {};
 function hideModelMenu() { $('#modelMenu').classList.add('hidden'); modelMenuAgent = null; }
 async function loadModels(a) {
@@ -1181,10 +1293,12 @@ function renderModelMenu() {
   const known = L ? [...L.models, ...(L.more || [])] : null;
   const unc = id => !!(known && id && !known.includes(id));
   const shown = id => (unc(id) ? t('{model}（尚未確認可用）', { model: modelName(a, id) }) : modelName(a, id));
-  const item = id => `<button data-m="${esc(id)}" title="${esc(id)}"><span class="nm${unc(id) ? ' unc' : ''}">${esc(shown(id))}</span>${ck(eff.model === id)}</button>`;
   const own = current.agentCfg?.[a] || {};
+  // 打勾只看這個對話有沒有另外選：沒選就只勾「跟隨設定」，選了就只勾那一項
+  const item = id => `<button data-m="${esc(id)}" title="${esc(id)}"><span class="nm${unc(id) ? ' unc' : ''}">${esc(shown(id))}</span>${ck(own.model === id)}</button>`;
+  if (modelMenuKind === 'perm') { m.innerHTML = permMenuHtml(a, base, own, ck); return; }
   let html = `<div class="sec">${esc(t('模型（只套用在這個對話）'))}</div>
-    <button data-m=""><span class="nm${unc(base.model) ? ' unc' : ''}">${esc(t('預設（設定：{model}）', { model: base.model ? shown(base.model) : t('CLI 預設') }))}</span>${ck(typeof own.model !== 'string')}</button>
+    <button data-m=""><span class="nm${unc(base.model) ? ' unc' : ''}">${esc(t('跟隨設定（{model}）', { model: base.model ? shown(base.model) : t('CLI 預設') }))}</span>${ck(typeof own.model !== 'string')}</button>
     <button data-cli><span class="nm">${esc(t('CLI 自己決定'))}</span>${ck(own.model === '')}</button>`;
   if (!L) html += `<div class="sec">${esc(modelErrors[a] ? t(modelErrors[a]) : t('讀取模型清單中…'))}</div>`;
   else {
@@ -1198,27 +1312,29 @@ function renderModelMenu() {
   if (a !== 'claude') html += `<button data-reload class="more">${esc(t('重新讀取模型清單'))}</button>`;
   if (effortsOf(a).length) {
     html += `<hr><div class="sec">${esc(t('強度'))}</div>
-      <button data-e=""><span class="nm">${esc(t('預設（設定：{model}）', { model: base.effort || t('CLI 預設') }))}</span>${ck(typeof own.effort !== 'string')}</button>`
+      <button data-e=""><span class="nm">${esc(t('跟隨設定（{model}）', { model: base.effort || t('CLI 預設') }))}</span>${ck(typeof own.effort !== 'string')}</button>`
       + effortsOf(a).map(e => `<button data-e="${e}"><span class="nm">${e}</span>${ck(typeof own.effort === 'string' && eff.effort === e)}</button>`).join('');
-  }
-  // 權限：只套用在這個對話的工作模式（對話模式一律唯讀）
-  if (PERMS[a]) {
-    const pk = permKeyOf(a), mine = typeof own[pk] === 'string';
-    html += `<hr><div class="sec">${esc(t('權限（只套用在這個對話的工作模式）'))}</div>
-      <button data-p=""><span class="nm">${esc(t('預設（設定：{model}）', { model: permShort(a, base[pk] || PERMS[a][0][0]) }))}</span>${ck(!mine)}</button>`
-      + PERMS[a].map(([v, label]) => `<button data-p="${v}" title="${esc(t(label))}"><span class="nm">${esc(t(label))}</span>${ck(mine && own[pk] === v)}</button>`).join('');
   }
   m.innerHTML = html;
 }
-async function showModelMenu(a, btn) {
-  modelMenuAgent = a; modelMenuMore = false;
+// 權限選單：只套用在這個對話的工作模式。每一項上面是名稱、下面是說明；有安全疑慮的用警告色
+function permMenuHtml(a, base, own, ck) {
+  const pk = permKeyOf(a), mine = typeof own[pk] === 'string';
+  const two = label => { const [name, ...rest] = t(label).split(/[：:]/); return `<span class="nm two"><span>${esc(name.trim())}</span>${rest.length ? `<span class="desc">${esc(rest.join('：').trim())}</span>` : ''}</span>`; };
+  const cls = v => (DANGER_PERMS[a]?.includes(v) ? ' class="danger"' : '');
+  return `<div class="sec">${esc(t('權限（只套用在這個對話的工作模式）'))}</div>
+    <button data-p=""><span class="nm">${esc(t('跟隨設定（{model}）', { model: permShort(a, base[pk] || PERMS[a][0][0]) }))}</span>${ck(!mine)}</button>`
+    + PERMS[a].map(([v, label]) => `<button data-p="${v}"${cls(v)}>${two(label)}${ck(mine && own[pk] === v)}</button>`).join('');
+}
+async function showModelMenu(a, btn, kind = 'model') {
+  modelMenuAgent = a; modelMenuMore = false; modelMenuKind = kind;
   const m = $('#modelMenu');
   renderModelMenu();
   m.classList.remove('hidden');
   const r = btn.getBoundingClientRect();
   m.style.left = Math.max(6, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px';
   m.style.top = Math.max(6, Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8)) + 'px';
-  if (!modelLists[a]) { delete modelErrors[a]; await loadModels(a); if (modelMenuAgent === a) renderModelMenu(); }
+  if (kind === 'model' && !modelLists[a]) { delete modelErrors[a]; await loadModels(a); if (modelMenuAgent === a) renderModelMenu(); }
 }
 async function setConvAgentCfg(a, patch) {
   if (!current) return;
@@ -1230,10 +1346,12 @@ $('#agentCards').addEventListener('click', e => {
   if (reset) return resetSession(reset.dataset.reset);
   const comp = e.target.closest('.sess-compress');
   if (comp) return compressWith(comp.dataset.compress);
+  const p = e.target.closest('.perm-btn[data-perm]');
+  if (p) { e.stopPropagation(); return modelMenuAgent === p.dataset.perm && modelMenuKind === 'perm' ? hideModelMenu() : showModelMenu(p.dataset.perm, p, 'perm'); }
   const b = e.target.closest('.model-btn');
   if (!b) return;
   e.stopPropagation();
-  if (modelMenuAgent === b.dataset.model) hideModelMenu(); else showModelMenu(b.dataset.model, b);
+  if (modelMenuAgent === b.dataset.model && modelMenuKind === 'model') hideModelMenu(); else showModelMenu(b.dataset.model, b);
 });
 $('#modelMenu').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -1250,39 +1368,69 @@ $('#modelMenu').addEventListener('click', e => {
   else if ('p' in b.dataset) setConvAgentCfg(a, { [permKeyOf(a)]: b.dataset.p || null });
   hideModelMenu();
 });
-document.addEventListener('mousedown', e => { if (!e.target.closest('#modelMenu, .model-btn')) hideModelMenu(); }, true);
+document.addEventListener('mousedown', e => { if (!e.target.closest('#modelMenu, .model-btn, .perm-btn')) hideModelMenu(); }, true);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideModelMenu(); });
 window.addEventListener('blur', hideModelMenu);
-const panelOn = () => !document.body.classList.contains('panel-off');
 setInterval(() => { if (agentStatus.running.length && panelOn()) renderAgentPanel(); }, 1000);
 setInterval(() => { if (panelOn()) { renderAgentPanel(); refreshWork(); } }, 30000);
+// 右欄開關：使用者按 ▤ 的選擇記在 localStorage。視窗窄到主欄放不下（PANEL_AUTO 以下）時自動收起、不記；
+// 拉寬回來再自動打開。窄的時候使用者自己按 ▤ 打開就照他的，直到視窗又變寬
+const PANEL_AUTO = 1100;
+let panelPref = true, panelAuto = false, panelForced = false;
+try { panelPref = localStorage.getItem('agentPanel') !== '0'; } catch {}
+const panelOn = () => !document.body.classList.contains('panel-off');
 function setPanel(on) {
+  panelPref = on;
+  panelForced = innerWidth < PANEL_AUTO;
+  panelAuto = false;
   document.body.classList.toggle('panel-off', !on);
   try { localStorage.setItem('agentPanel', on ? '1' : '0'); } catch {}
   fitTopbar();
+  if (on) renderAgentPanel();
 }
-try { if (localStorage.getItem('agentPanel') === '0') document.body.classList.add('panel-off'); } catch {}
+function autoPanel() {
+  const narrow = document.body.clientWidth < PANEL_AUTO;
+  if (!narrow) panelForced = false;
+  const on = panelPref && (!narrow || panelForced);
+  panelAuto = panelPref && !on;
+  document.body.classList.toggle('panel-off', !on);
+  $('#togglePanel').title = t(panelAuto ? '視窗太窄，Agent 工作狀況先收起來了；點擊顯示' : '顯示／隱藏 Agent 工作狀況');
+}
 $('#togglePanel').onclick = () => setPanel(!panelOn());
-// 主欄很窄時頂列只留標題與圖示（樣式見 style.css 的 #topbar.tight），圖示才不會被擠出去蓋到右欄
-function fitTopbar() { $('#topbar').classList.toggle('tight', $('#main').clientWidth < 400); }
-window.addEventListener('resize', fitTopbar);
-fitTopbar();
+// 主欄很窄時頂列只留標題與圖示（樣式見 style.css 的 #topbar.tight），圖示才不會被擠出去蓋到右欄；
+// 主欄不到 600 時輸入框也收緊（#main.narrow：模式只留圖示、藏資訊列）
+function fitTopbar() {
+  const w = $('#main').clientWidth;
+  $('#topbar').classList.toggle('tight', w < 400);
+  $('#main').classList.toggle('narrow', w < 600);
+}
+function fitLayout() { autoPanel(); fitTopbar(); }
+window.addEventListener('resize', fitLayout);
+fitLayout();
 
 // ---------- 頂列 ----------
-$('#convTitle').ondblclick = () => {
+function editTitle() {
   if (!current) return;
   const box = $('#convTitle'); box.contentEditable = 'true'; box.focus();
   document.getSelection().selectAllChildren(box);
   const done = async () => { box.contentEditable = 'false'; box.onblur = null; current.title = box.textContent.trim() || current.title; await api.updateConv(current.id, { title: current.title }); };
   box.onblur = done;
   box.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); box.blur(); } if (e.key === 'Escape') { box.textContent = t(current.title); box.blur(); } };
-};
+}
+$('#convTitle').ondblclick = editTitle;
 async function setCwd(p) {
   if (!current || !p) return;
   if (projKey(p) !== projKey(current.cwd)) { current = await api.updateConv(current.id, { cwd: p }); renderConv(); }
   $('#input').focus();
 }
-$('#cwdBtn').onclick = async () => current && setCwd(await api.pickFolder(current.cwd));
+$('#cwdBtn').onclick = () => current && api.openPath(current.cwd);
+$('#moreBtn').onclick = e => {
+  e.stopPropagation();
+  const c = current && convList.find(x => x.id === current.id);
+  if (!c) return;
+  const r = $('#moreBtn').getBoundingClientRect();
+  showConvMenu(c, r.right - 200, r.bottom + 4, true);
+};
 
 // ---------- 新對話：輸入框上方的資料夾選單 ----------
 function recentDirs() {
@@ -1309,21 +1457,20 @@ $('#cwdMenu').onclick = async e => {
 };
 document.addEventListener('click', e => { if (!e.target.closest('.cwd-pick')) closeCwdMenu(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#cwdMenu').classList.contains('hidden')) closeCwdMenu(); });
-$('#openCwd').onclick = () => current && api.openPath(current.cwd);
-$('#resetSessions').onclick = async () => {
-  if (!current || !await confirmBox(t('讓 Claude / Codex / Cursor 下一次都開新 session？\n畫面上的對話記錄會保留，並在下一次送出時當作參考帶給 Agent。'))) return;
+async function resetAllSessions() {
+  if (!current || isRunning() || !await confirmBox(t('讓 Claude / Codex / Cursor 下一次都開新 session？\n畫面上的對話記錄會保留，並在下一次送出時當作參考帶給 Agent。'))) return;
   current = await api.updateConv(current.id, { resetSessions: true });
-};
+  renderAgentPanel();
+}
 async function deleteConvById(id, title) {
   if (!await confirmBox(t('刪除「{title}」？此動作無法復原。', { title: t(title) }))) return;
   await api.deleteConv(id);
   delete drafts[id];
   if (current?.id === id) { current = null; loadDraft(); }
   await refreshList();
-  if (!current) { const next = firstConv(); if (next) openConv(next.id); else renderConv(); }
+  if (!current) { const next = nextConv(); if (next) openConv(next.id); else renderConv(); }
   else renderList();
 }
-$('#deleteConv').onclick = () => current && deleteConvById(current.id, current.title);
 
 // ---------- 自訂 Agent ----------
 const CUSTOM_PRESETS = {
@@ -1373,10 +1520,11 @@ function customSettingsHtml(a) {
   const v = k => esc(c[k] ?? '');
   const effs = Presets.effortList(c);
   const opt = (list, cur) => list.map(([val, t]) => `<option value="${val}" ${cur === val ? 'selected' : ''}>${t}</option>`).join('');
-  return `<section class="set-group custom" data-agent="${a}">
-    <h3><span class="badge" style="background:${safeColor(c.color)}">${esc((c.name || '?').trim().charAt(0).toUpperCase())}</span>${esc(c.name || t('自訂 Agent'))}<span class="muted">${t('自訂')}</span><span class="spacer"></span>
+  return `<section class="set-group custom${foldCls(a)}" data-agent="${a}">
+    <h3 class="fold-head" title="${esc(t('展開／收合這個 Agent 的設定'))}"><span class="chev"></span><span class="badge" style="background:${safeColor(c.color)}">${esc((c.name || '?').trim().charAt(0).toUpperCase())}</span>${esc(c.name || t('自訂 Agent'))}<span class="muted">${t('自訂')}</span><span class="spacer"></span>
       <button class="btn subtle" data-act="delete">${t('刪除')}</button></h3>
     <div class="conn-wrap" data-conn="${a}">${connHtml(a)}</div>
+    <div class="ag-body">
     <label class="row"><span>${t('名稱／顏色')}</span><div class="inline"><input data-k="name" value="${v('name')}" placeholder="${t('顯示名稱')}"><input data-k="color" type="color" value="${safeColor(c.color)}" class="color"></div></label>
     <label class="row"><span>${t('CLI 指令')}</span><input data-k="cli" value="${v('cli')}" placeholder="${t('例如 gemini，或完整路徑')}"></label>
     <label class="row"><span>${t('額外參數')}</span><input data-k="args" value="${v('args')}" placeholder="${t('例如 --output-format stream-json --yolo')}"></label>
@@ -1402,6 +1550,7 @@ function customSettingsHtml(a) {
       <label class="row"><span>${t('安裝指令')}</span><input data-k="installCmd" value="${v('installCmd')}" placeholder="${t('PowerShell 指令，例如 npm install -g …')}"></label>
       <label class="row"><span>${t('說明網址')}</span><input data-k="doc" value="${v('doc')}" placeholder="https://…"></label>
     </details>
+    </div>
   </section>`;
 }
 
@@ -1454,18 +1603,23 @@ function agentSettingsHtml(a) {
   const effort = [`<option value="">${t('預設（CLI 自己決定）')}</option>`, ...EFFORTS[a].map(e => `<option ${c.effort === e ? 'selected' : ''}>${e}</option>`)].join('');
   const permKey = a === 'codex' ? 'sandbox' : 'permission';
   const perms = PERMS[a].map(([v, label]) => `<option value="${v}" ${c[permKey] === v ? 'selected' : ''}>${t(label)}</option>`).join('');
-  return `<section class="set-group" data-agent="${a}">
-    <h3><span class="badge ${a}">${INITIAL[a]}</span>${LABEL[a]}${a === 'claude' ? `<span class="muted">${t('（主要對話，不能移除）')}</span>` : ''}<span class="spacer"></span>
+  return `<section class="set-group${foldCls(a)}" data-agent="${a}">
+    <h3 class="fold-head" title="${esc(t('展開／收合這個 Agent 的設定'))}"><span class="chev"></span><span class="badge ${a}">${INITIAL[a]}</span>${LABEL[a]}${a === 'claude' ? `<span class="muted">${t('（主要對話，不能移除）')}</span>` : ''}<span class="spacer"></span>
       ${a === 'claude' ? '' : `<button class="btn subtle" data-act="disable">${t('移除')}</button>`}</h3>
     <div class="conn-wrap" data-conn="${a}">${connHtml(a)}</div>
+    <div class="ag-body">
     <label class="row"><span>${t('CLI 指令')}</span><input data-k="cli" value="${esc(c.cli)}" placeholder="${a === 'cursor' ? 'agent' : a}"></label>
     <label class="row"><span>${t('預設模型')}</span><div class="inline">${modelFieldHtml(a, c)}</div></label>
     <label class="row"><span>${t('強度')}</span><select data-k="effort">${effort}</select></label>
     ${a === 'cursor' ? `<div class="hint">${t('Cursor 的強度會組成 模型[effort=…]；模型 id 本身已含強度（例如 -high）時不另外加。')}</div>` : ''}
     <label class="row"><span>${a === 'codex' ? t('沙箱') : t('權限')}</span><select data-k="${permKey}">${perms}</select></label>
     ${frugalRowHtml(c)}
+    </div>
   </section>`;
 }
+// 設定頁每個 Agent 的表單預設收起來，只露出名稱與連線狀態；點標題展開。展開了哪些在這次開著設定頁時記住
+let openSecs = new Set();
+const foldCls = a => (openSecs.has(a) ? '' : ' folded');
 // 每個 Agent 各自開關的「極度節省 token」規則（主程序在 prompt 裡附上，見 main.js 的 notesFor）
 const FRUGAL_HINT = 'AgentDesk 會在每個 session 開頭把這條規則附給這個 Agent：不寫旁白、只在收尾回覆結果、不重述，壞消息與未驗證的事照常講。只在 AgentDesk 裡有效。';
 function frugalRowHtml(c) {
@@ -1550,6 +1704,7 @@ function openSettings(note) {
   $('#setCwd').value = form.defaultCwd;
   $('#setDelegation').checked = form.delegation;
   $('#setContext').value = form.context || 'standard';
+  openSecs = new Set();
   renderAgentSettings();
   $('#setMsg').textContent = note || '';
   $('#envResult').innerHTML = '';
@@ -1562,6 +1717,14 @@ $('#openSettings').onclick = () => openSettings();
 $('#settingsModal').onclick = async e => {
   if (e.target === $('#settingsModal') || e.target.closest('[data-close]')) return $('#settingsModal').classList.add('hidden');
   const btn = e.target.closest('button');
+  // 點 Agent 的標題（不是標題上的按鈕）：展開／收合那一段
+  const head = !btn && e.target.closest('#agentSettings .fold-head');
+  if (head) {
+    const sec = head.closest('section'), id = sec.dataset.agent;
+    sec.classList.toggle('folded');
+    if (sec.classList.contains('folded')) openSecs.delete(id); else openSecs.add(id);
+    return;
+  }
   const a = btn?.closest('section')?.dataset.agent;
   const act = btn?.dataset.act;
   if (act === 'addCustom') {
@@ -1571,6 +1734,7 @@ $('#settingsModal').onclick = async e => {
     if (pick.startsWith('builtin:')) {
       const b = pick.slice(8);
       form.agents[b].enabled = true;
+      openSecs.add(b);
       renderAgentSettings();
       checkCli(b);
       document.querySelector(`section[data-agent="${b}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1581,6 +1745,7 @@ $('#settingsModal').onclick = async e => {
     const { title, ...preset } = CUSTOM_PRESETS[pick] || CUSTOM_PRESETS.text;
     const id = newCustomId();
     form.agents[id] = { ...preset, name: t(preset.name), custom: true, enabled: true, delegate: true };
+    openSecs.add(id);
     renderAgentSettings();
     checkCli(id);
     const sec = document.querySelector(`section[data-agent="${id}"]`);

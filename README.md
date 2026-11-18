@@ -68,9 +68,10 @@ Delegated agents follow the chat's mode, so in chat mode the same read-only limi
 
 **Workflow and control**
 
-- Chat mode and work mode per chat (💬 / 🛠 at the top of the sidebar). AgentDesk asks first if another chat is already running in work mode in the same folder.
+- Chat mode and work mode per chat (the 💬 / 🛠 button under the input box). AgentDesk asks first if another chat is already running in work mode in the same folder.
 - Pick the model, effort and permissions per chat from the agent card. Claude asks before edits and commands by default.
 - Each reply shows the tokens it used (and the cost when the CLI reports it); the right panel totals the chat.
+- When an agent asks you to decide, its suggested answers show as buttons, and the first one is in the input box ready for Tab.
 - In work mode Claude can stop and ask you to allow a command or edit.
 - The right panel shows each agent's status, session size and remaining quota, with **Restart**, plus **Compress** when a session gets large.
 - **Environment check** in Settings checks Node.js, whether each CLI is installed and signed in, and whether the working folders are writable, with a fix for each problem.

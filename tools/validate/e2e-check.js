@@ -36,19 +36,19 @@
   out.ctxChars = current.messages.map(m => m.ctxChars || 0);
   out.contextSetting = $('#setContext') ? [...$('#setContext').options].map(o => o.value).join() : '';
   // 3b) 對話／工作模式（切換鈕在側欄最上面、「新對話」的右邊）：新對話預設「對話」（唯讀說明放在 prompt 最前面），切到「工作」會存進對話、說明不再帶
-  const modeBtn = m => document.querySelector(`#modeToggle button[data-mode="${m}"]`);
+  const modeBtn = m => document.querySelector(`#modeToggle [data-mode="${m}"]`);
   const isOn = m => modeBtn(m).classList.contains('on');
   const lastText = c => c.messages.at(-1).parts.filter(p => p.kind === 'text').map(p => p.text).join('');
   const noteHead = `(head: ${t('[對話模式：唯讀。不要建立、修改或刪除檔案，也不要執行會改動檔案的指令。需要改檔時，先說明要改什麼，再於回覆最後另起一行只寫 {mark}，AgentDesk 會請使用者決定要不要切換到工作模式。]').slice(0, 12)})`;
   const mid = current.id;
-  out.mode = { buttons: [...document.querySelectorAll('#modeToggle button')].map(b => b.dataset.mode).join(),
+  out.mode = { buttons: [...document.querySelectorAll('#modeToggle [data-mode]')].map(b => b.dataset.mode).join(),
     initial: current.mode === 'chat' && isOn('chat') && !isOn('work'),
     chatNote: !!out.messages[0]?.text.includes(noteHead) };
-  // 位置：在側欄裡、和「新對話」同一列、在它右邊，右緣對齊下面的「依日期｜依專案」；頂列不再有
+  // 位置：輸入框左下（＋ 的右邊、Agent 切換的左邊），按鈕寫出目前的模式；側欄與頂列都沒有
   const rc = sel => document.querySelector(sel).getBoundingClientRect();
-  const tg = rc('#modeToggle'), nb = rc('#newConv'), vt = rc('#viewToggle');
-  out.mode.place = !!document.querySelector('#sidebar .side-top #modeToggle') && !document.querySelector('#topbar #modeToggle')
-    && tg.left >= nb.right && Math.abs((tg.top + tg.bottom) / 2 - (nb.top + nb.bottom) / 2) <= 1 && Math.abs(tg.right - vt.right) <= 1;
+  const tg = rc('#modeBtn'), pl = rc('#plusBtn'), ap = rc('#agentPicker');
+  out.mode.place = !!document.querySelector('#composer .composer-row #modeToggle') && !document.querySelector('#sidebar #modeToggle, #topbar #modeToggle')
+    && tg.left >= pl.right && tg.right <= ap.left && $('#modeBtn .t').textContent === t('對話');
   // 測試視窗是隱藏的，requestAnimationFrame 不會跑；先手動重畫，切換鈕才會從「執行中停用」恢復
   flush();
   out.mode.enabled = !modeBtn('work').disabled && !modeBtn('chat').disabled;
@@ -138,21 +138,59 @@
   const useEl = [...document.querySelectorAll('#messages .msg.assistant')].at(-1)?.querySelector('.use-note');
   out.usage = { stored: n4.messages.at(-1).meta?.turn?.total === 75110, shown: /75\.1k tokens/.test(useEl?.textContent || '') && !/\$/.test(useEl?.textContent || ''),
     conv: /tokens/.test($('#convUsage').textContent), cost: usageHtml({ input: 1, output: 1, total: 2, cost: 0.5 }).includes('$0.50') && usageHtml({ input: 1, output: 1, total: 2, cost: 0.004 }).includes('$0.0040'), cjk: CJK.test((useEl?.textContent || '') + (useEl?.title || '') + $('#convUsage').textContent + $('#convUsage').title) };
-  // 3e3) 每個對話自己的權限：右欄 Claude 卡片的選單有「權限」一節，選了存在這個對話、卡片那一行顯示；選回預設就拿掉
-  const pmBtn = () => document.querySelector('#agentCards .model-btn[data-model="claude"]');
-  showModelMenu('claude', pmBtn());
+  // 3e4) 選項：回覆最後的選項變成按鈕（只在最後一則）；輸入框的提示字變成第一個選項，Tab 填進去；按另一個選項直接送給同一個 Agent
+  const chConv = await api.createConv(current.cwd);
+  await api.send(chConv.id, 'xecho', 'show choices');
+  let chC = null;
+  for (let i = 0; i < 60; i++) { await wait(250); chC = await api.getConv(chConv.id); if (chC.messages.at(-1)?.status === 'done') break; }
+  await openConv(chConv.id); flush(); updateComposer();
+  const chBtns = [...document.querySelectorAll('#messages .choices [data-choice]')].map(b => b.textContent);
+  const chHint = $('#input').placeholder;
+  $('#input').value = '';
+  $('#input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+  const chTab = $('#input').value;
+  // 輸入框裡打到一半的字：按選項送出的是選項，打的字留著
+  $('#input').value = 'half typed'; autoGrow();
+  document.querySelector('#messages .choices [data-choice="not now"]')?.click();
+  const chKept = $('#input').value === 'half typed';
+  $('#input').value = ''; autoGrow();
+  let chC2 = null;
+  for (let i = 0; i < 60; i++) { await wait(250); chC2 = await api.getConv(chConv.id); if (chC2.messages.length >= 4 && chC2.messages.at(-1).status === 'done') break; }
+  current = chC2; renderConv(); flush(); updateComposer();
+  out.choices = { stored: JSON.stringify(chC.messages.at(-1).choices) === '["go ahead","not now"]', hidden: !/agentdesk:choices/.test(document.querySelector('#messages').innerText),
+    buttons: chBtns.join() === 'go ahead,not now', hint: chHint.includes('go ahead'), tab: chTab === 'go ahead',
+    sent: chC2.messages[2]?.text === 'not now' && chC2.messages[3]?.agent === 'xecho', kept: chKept, gone: !document.querySelector('#messages .choices') && !$('#input').placeholder.includes('go ahead'),
+    cjk: CJK.test(chHint.replace('go ahead', '')) };
+  await openConv(mid);
+  await api.deleteConv(chConv.id);
+  // 3e3) 每個對話自己的權限：卡片上模型、權限是兩個按鈕。對話模式的權限按鈕顯示唯讀、不能點；
+  //      工作模式點了只出現權限選單（不混模型），選了存在這個對話、按鈕顯示，危險的用警告色；選回「跟隨設定」就拿掉。
+  //      模型選單的打勾只看這個對話有沒有另外選
+  const pmMode = convMode(current);
+  current = await api.updateConv(mid, { mode: 'chat' }); renderAgentPanel(); renderMode();
+  const pmPerm = () => document.querySelector('#agentCards .acard[data-agent="claude"] .perm-btn');
+  // 對話模式：卡片上沒有權限按鈕，右欄上方寫一次「所有 Agent 唯讀」，輸入框下方那一行寫唯讀
+  const pmChat = { noBtn: !pmPerm() || pmPerm().offsetParent === null, note: !$('#modeNote').classList.contains('hidden'),
+    text: $('#modeNote').textContent, info: $('#agentInfo').textContent };
+  current = await api.updateConv(mid, { mode: 'work' }); renderAgentPanel(); renderMode();
+  const pmWorkNoNote = $('#modeNote').classList.contains('hidden') && pmPerm()?.offsetParent !== null;
+  pmPerm()?.click();
   const pmItems = [...document.querySelectorAll('#modelMenu [data-p]')];
-  const pmText = $('#modelMenu').innerText;
+  const pmText = $('#modelMenu').innerText, pmNoModel = !document.querySelector('#modelMenu [data-m]');
   pmItems.find(b => b.dataset.p === 'bypassPermissions')?.click();
   for (let i = 0; i < 20 && current.agentCfg?.claude?.permission !== 'bypassPermissions'; i++) await wait(100);
   const pmSaved = (await api.getConv(mid)).agentCfg?.claude?.permission === 'bypassPermissions';
-  const pmLine = pmBtn()?.textContent || '';
-  showModelMenu('claude', pmBtn());
+  const pmLine = pmPerm()?.textContent || '', pmDanger = !!pmPerm()?.classList.contains('danger');
+  pmPerm()?.click();
   document.querySelector('#modelMenu [data-p=""]')?.click();
   for (let i = 0; i < 20 && current.agentCfg?.claude?.permission; i++) await wait(100);
-  out.perm = { items: pmItems.length === 6, saved: pmSaved, line: pmLine.includes(permShort('claude', 'bypassPermissions')), reset: !(await api.getConv(mid)).agentCfg?.claude?.permission,
-    cjk: CJK.test(pmText + pmLine) };
+  showModelMenu('claude', document.querySelector('#agentCards .model-btn[data-model="claude"]'));
+  const pmChecks = [...document.querySelectorAll('#modelMenu [data-m] .ck')].length, pmNoPerm = !document.querySelector('#modelMenu [data-p]');
   hideModelMenu();
+  current = await api.updateConv(mid, { mode: pmMode }); renderAgentPanel(); renderMode();
+  out.perm = { chatRo: pmChat.noBtn && pmChat.note && pmChat.info.includes(t('唯讀')), workNoNote: pmWorkNoNote,
+    items: pmItems.length === 6, split: pmNoModel && pmNoPerm, saved: pmSaved, line: pmLine.includes(permShort('claude', 'bypassPermissions')), danger: pmDanger,
+    checks: pmChecks === 1, reset: !(await api.getConv(mid)).agentCfg?.claude?.permission, cjk: CJK.test(pmText + pmLine + pmChat.text) };
   // 超過門檻（10 萬 tokens）：提醒重開
   current.sizes = { ...current.sizes, xcc: { tokens: 123456 } };
   renderAgentPanel();
@@ -652,6 +690,49 @@
   await api.deleteConv(apConv.id);
   hset.agents.xslow.enabled = false; hset.agents.xhold.enabled = false;
   settings = await api.setSettings(hset);
+  // 7j) UX：沒用過的新對話不重複建、不列出來；頂列「⋯」選單；模式選單；視窗窄時收右欄、輸入框不爆框；設定頁每個 Agent 預設收起
+  await refreshList();
+  const ux = {}, convCount = async () => (await api.listConvs()).length;
+  await newConv(); const bk1 = current.id, nAfter1 = await convCount();
+  ux.blankTop = $('#compressBtn').classList.contains('hidden') && $('#moreBtn').classList.contains('hidden') && $('#cwdBtn .t').textContent === baseName(current.cwd);
+  await openConv(mid); await refreshList();
+  ux.blankHidden = !document.querySelector(`#convList li[data-id="${bk1}"]`);
+  await newConv(); await refreshList();
+  ux.blankReuse = current.id === bk1 && bk1 !== mid && (await convCount()) === nAfter1;
+  ux.blankShown = !!document.querySelector(`#convList li[data-id="${bk1}"]`);
+  // 刪掉對話後要開的那一個（nextConv）不挑沒用過的新對話
+  ux.firstSkipsBlank = !!nextConv() && nextConv().id !== bk1;
+  await openConv(mid); await refreshList();
+  $('#moreBtn').click();
+  const cm2 = $('#ctxMenu');
+  ux.more = !cm2.classList.contains('hidden') && !!cm2.querySelector('[data-act="reset"]') && !!cm2.querySelector('[data-act="delete"]') && !!cm2.querySelector('[data-act="rename"]');
+  ux.moreCjk = CJK.test(cm2.innerText.replace(/[A-Z]$/gm, ''));
+  hideCtx();
+  $('#modeBtn').click();
+  ux.modeMenu = !$('#modeMenu').classList.contains('hidden') && $('#modeMenu').querySelectorAll('[data-mode]').length === 2;
+  ux.modeCjk = CJK.test($('#modeMenu').innerText + $('#modeBtn').innerText + $('#modeBtn').title);
+  document.body.click();
+  ux.modeClosed = $('#modeMenu').classList.contains('hidden');
+  ux.infoOneLine = $('#agentInfo').scrollHeight <= 24 && !$('#agentInfo').textContent.includes(t('可委派給 {names}', { names: '' }).trim());
+  const lay = w => {
+    document.body.style.width = w ? w + 'px' : ''; fitLayout();
+    const box = $('.composer-box').getBoundingClientRect();
+    const kids = [...document.querySelectorAll('.composer-row > *')].filter(el => el.offsetParent !== null);
+    return { w, panel: panelOn(), narrow: $('#main').classList.contains('narrow'), main: Math.round($('#main').clientWidth),
+      fits: kids.every(el => el.getBoundingClientRect().right <= box.right + 0.5) && $('#sendBtn').offsetParent !== null };
+  };
+  ux.layout = [0, 1000, 760].map(lay);
+  setPanel(true); ux.forced = panelOn();
+  ux.layout.push(lay(0));
+  ux.panelTip = CJK.test($('#togglePanel').title);
+  openSettings();
+  const secs = [...document.querySelectorAll('#agentSettings section[data-agent]')];
+  ux.folded = secs.length > 0 && secs.every(s => s.classList.contains('folded') && s.querySelector('.ag-body').offsetParent === null && s.querySelector('.conn-wrap').offsetParent !== null);
+  secs[0].querySelector('.fold-head').click();
+  ux.unfold = !secs[0].classList.contains('folded') && secs[0].querySelector('.ag-body').offsetParent !== null;
+  ux.foldCjk = CJK.test(secs[0].querySelector('.fold-head').title);
+  $('#settingsModal').classList.add('hidden');
+  out.ux = ux;
   // 8) 逐字稿：validate.js 依對話 id 讀主程序寫的檔，段數要等於訊息數；
   //    第二次啟動時帶入 window.__DELETE（第一次的對話），刪掉後它的逐字稿要跟著不見
   out.transcript = { id: mid, count: (await api.getConv(mid)).messages.length };

@@ -6,7 +6,7 @@ This page covers the details the [README](../README.md) leaves out: how each fea
 
 ## Chat mode and work mode
 
-Every chat has its own mode. Switch the open chat with 💬 / 🛠 at the top right of the left sidebar (not while a turn is running). New chats start in chat mode.
+Every chat has its own mode. Switch the open chat with the mode button at the bottom left of the input box (💬 Chat / 🛠 Work) (not while a turn is running). New chats start in chat mode.
 
 In chat mode AgentDesk tells every agent not to change files and uses each CLI's own read-only option:
 
@@ -23,17 +23,27 @@ When an agent needs to change a file in chat mode, it explains what it would cha
 
 **Approving actions as they happen (Claude only).** In work mode, when Claude's permission is **Manual** (the default for new installs) or **Accept edits**, an action that needs permission (a command, or also an edit under Manual) shows a card in the reply with **Allow** and **Deny**, and Claude waits for your answer. Pressing Stop or deleting the chat counts as Deny. This uses Claude Code's `--permission-prompt-tool` through AgentDesk's MCP bridge; Codex and Cursor have no equivalent in their non-interactive modes, so they keep their own permission settings.
 
-The permission can also be set for one chat: open the model menu on the agent card in the right panel and pick one under **Permissions (this chat, work mode only)**. The card shows the permission in use; **Default** goes back to the setting. Chat mode stays read-only either way.
+The permission can also be set for one chat: each agent card in the right panel has a permission button under the model (🔒, or ⚠ for Skip permission checks and full access). In work mode it opens a menu for this chat only; **Follow settings** goes back to the setting. In chat mode the cards have no permission button; the top of the right panel says once that all agents are read-only.
 
 A Cursor session that has run read-only cannot go back to writing, so when a chat switches to work mode AgentDesk starts a new Cursor session and passes the earlier chat along as context. Chats created before modes existed open in chat mode.
 
 If another chat in the same folder is running in work mode, AgentDesk asks before sending, since two agents changing files at the same time can overwrite each other. Chat mode and compression only read, so they do not count.
+
+## New chats and working folders
+
+**New chat** or Ctrl+N reuses a new chat you have not sent anything in yet instead of creating another one. New chats with no messages are not listed in the sidebar.
+
+Pick the working folder from the folder menu above the input box before the first message. After that it stays fixed: the top bar shows only the folder name, and clicking it opens the folder in File Explorer. Rename, fresh sessions for all agents, archive and delete are in the ⋯ menu in the top bar, and in the sidebar's right-click menu.
 
 ## Shared context
 
 Each chat remembers every agent's session. When you talk to an agent, whatever it has not seen from the other agents is sent with your message. That text counts toward the agent's usage, so it is capped by **Context to include** in Settings: Lean (about 6,000 characters), Standard (16,000, the default) or Full (40,000). Past the cap, the newest messages and the first request of the chat are kept. Each reply shows how many characters were sent with it.
 
 Chats with a progress file use the Lean cap and send only the last 6 messages; the agent reads the background from the progress file.
+
+## Quick replies
+
+When a reply ends by asking you to decide something, the agent is asked to add a hidden line with 2 to 4 short answers. They show as buttons under the latest reply; clicking one sends it to the same agent. The first one also appears as the hint in the input box, and **Tab** fills it in. The request goes to the agent you talk to directly (in Claude's system prompt, at the start of the prompt for the others), not to delegated agents. Agents can skip it, and then no buttons appear.
 
 ## Delegation
 
@@ -84,6 +94,7 @@ The right panel shows the current chat only: whether each agent is idle or worki
 - **Remaining usage** (5-hour and weekly): Claude updates after every reply, Codex is read every 5 minutes, Cursor does not report it.
 - **Session size**: the tokens re-sent on every later turn at minimum. Exact for Claude, estimated for Codex and Cursor. Above 100,000 it is flagged and **Compress** appears on the card.
 - **Restart** clears that agent's session in this chat.
+- Below 1,100 px of window width the right panel hides itself and comes back when the window is wider; ▤ in the top bar shows it anyway.
 - **Usage**: each reply shows that turn's tokens (input including cache, plus output) next to the agent name, with the cost when the CLI reports one (Claude, at API prices). The panel shows the total for this chat. Codex and Antigravity report running totals per session, so AgentDesk subtracts the previous turn; the first turn after an AgentDesk update in an existing session shows nothing.
 
 ## Custom agents
