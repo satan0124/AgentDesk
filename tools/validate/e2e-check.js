@@ -131,7 +131,7 @@
   renderAgentPanel();
   const sess = () => document.querySelector('#agentCards .acard[data-agent="xcc"] .sess');
   out.size = { stored: n4.sizes?.xcc?.tokens, session: n4.sessions?.xcc, shown: /40\.1k/.test(sess()?.textContent || ''), notBig: !!sess() && !sess().classList.contains('big'),
-    cjk: sess() ? CJK.test(sess().innerText + sess().title + sess().querySelector('button').title) : null,
+    cjk: sess() ? CJK.test(sess().innerText + sess().title + (sess().querySelector('button')?.title || '')) : null,
     none: !document.querySelector('#agentCards .acard[data-agent="xecho"] .sess'), noCompress: !!sess() && !sess().querySelector('.sess-compress') };
   // 3e2) 這一輪的用量：result 的 usage 加起來 75,110 → 回覆標題旁顯示 75.1k tokens（費用 0 不顯示），右欄有這個對話的加總
   flush();
@@ -191,10 +191,14 @@
   out.perm = { chatRo: pmChat.noBtn && pmChat.note && pmChat.info.includes(t('唯讀')), workNoNote: pmWorkNoNote,
     items: pmItems.length === 6, split: pmNoModel && pmNoPerm, saved: pmSaved, line: pmLine.includes(permShort('claude', 'bypassPermissions')), danger: pmDanger,
     checks: pmChecks === 1, reset: !(await api.getConv(mid)).agentCfg?.claude?.permission, cjk: CJK.test(pmText + pmLine + pmChat.text) };
-  // 超過門檻（10 萬 tokens）：提醒重開
-  current.sizes = { ...current.sizes, xcc: { tokens: 123456 } };
+  // 門檻照模型的上下文：CLI 回報了上下文大小（Claude 的 modelUsage）就照它，1M 的模型用到 30% 不提醒；
+  // 沒回報的以 200k 估（標 ~），用到八成（170k＝85%）提醒壓縮
+  current.sizes = { ...current.sizes, xcc: { tokens: 300000, window: 1000000 } };
   renderAgentPanel();
-  out.size.big = !!sess()?.classList.contains('big') && /123k/.test(sess().textContent);
+  out.size.window = !sess()?.classList.contains('big') && /300k[／/]1M[（ (]+30%/.test(sess()?.textContent || '') && !sess()?.querySelector('button');
+  current.sizes = { ...current.sizes, xcc: { tokens: 170000 } };
+  renderAgentPanel();
+  out.size.big = !!sess()?.classList.contains('big') && /170k[／/]~200k[（ (]+85%/.test(sess().textContent);
   out.size.bigCjk = sess() ? CJK.test(sess().innerText) : null;
   // 偏大時多一顆「壓縮」（由這張卡片的 Agent 寫索引，7b 會按）
   const scomp = sess()?.querySelector('.sess-compress');
@@ -234,12 +238,12 @@
   };
   out.topbar = [1269, 1000, 900, 760].map(fit);
   fit(0); ttitle.textContent = told;
-  // 回合在跑的時候，卡片上的「壓縮」「重開」壓灰、不能按；跑完恢復
+  // 回合在跑的時候，卡片上的「壓縮」壓灰、不能按；跑完恢復。卡片上沒有「重開」
   const lastMsg = current.messages.at(-1), keepStatus = lastMsg.status;
   lastMsg.status = 'running'; renderAgentPanel();
-  out.size.offWhenRunning = sess()?.querySelectorAll('button').length === 2 && [...sess().querySelectorAll('button')].every(b => b.disabled);
+  out.size.offWhenRunning = sess()?.querySelectorAll('button').length === 1 && [...sess().querySelectorAll('button')].every(b => b.disabled);
   lastMsg.status = keepStatus; renderAgentPanel();
-  out.size.onWhenIdle = sess()?.querySelectorAll('button').length === 2 && [...sess().querySelectorAll('button')].every(b => !b.disabled);
+  out.size.onWhenIdle = sess()?.querySelectorAll('button').length === 1 && !!sess().querySelector('.sess-compress:not([disabled])');
   // 訊息下方的一列：時間、複製；Agent 的訊息多一顆「從這裡分支」。在訊息上按右鍵有同樣的功能（剪貼簿換成假的，只看寫進去什麼）
   const umsg = document.querySelector('#messages .msg.user'), amsg = [...document.querySelectorAll('#messages .msg.assistant')].at(-1);
   const foot = n => n?.querySelector(':scope > .msg-foot'), has = (n, act) => !!foot(n)?.querySelector(`[data-mact="${act}"]`);
@@ -261,12 +265,12 @@
   await tick();
   out.msgFoot.copyAgent = !!copied && copied === msgCopyText(byNode(amsg)) && mmenu.classList.contains('hidden');
   delete navigator.clipboard.writeText;
-  // 「重開」只清這個 Agent 的 session，別的 Agent 不動（確認視窗在測試裡直接答是）
+  // 「重開」的按鈕拿掉了（主程序的 resetSession 還在，內部用）：直接請主程序清掉 xcc 的 session，後面的檢查照原本的狀態跑
   window.confirmBox = async () => true;
-  sess()?.querySelector('.sess-reset').click();
-  await wait(500);
+  current = await api.updateConv(mid, { resetSession: 'xcc' }); renderAgentPanel();
   const n5 = await api.getConv(mid);
-  out.size.reset = !n5.sessions.xcc && !n5.sizes?.xcc && !!n5.sessions.xagy && !sess();
+  out.size.reset = !n5.sessions.xcc && !n5.sizes?.xcc && !!n5.sessions.xagy && !sess() && !document.querySelector('#agentCards .sess-reset')
+    && !document.querySelector('#ctxMenu [data-act="reset"]');
   // 4) 設定頁：開啟、每個自訂 Agent 都偵測到、存檔回應時間
   openSettings();
   await wait(2500);
@@ -457,7 +461,7 @@
   out.compress.next = { index: +kseen[1], recent: +kseen[2], first: +kseen[3], transcript: kseen[4], upto: kc1.indexed };
   // 再壓一次：只替新的段落寫索引，追加在原本的後面
   out.compress.againEnabled = !cbtn.disabled;
-  // 先讓 xcc 跑一輪大的（假 Claude 報 15 萬多 tokens，又改了一次 src/edited.js）→ 卡片偏大、出現壓縮鈕
+  // 先讓 xcc 跑一輪大的（假 Claude 報 17 萬多 tokens，又改了一次 src/edited.js）→ 卡片偏大、出現壓縮鈕
   await api.send(mid, 'xcc', 'big size turn');
   const kcb = await turnDone(kc2.messages.length + 2);
   // 這次從右欄卡片按：輸入框下方選的是 xecho，按的是 xcc 那張卡片 → 由 xcc 寫。
@@ -567,27 +571,31 @@
   const forkIds = [fc?.id, current.id !== mid ? current.id : null].filter(Boolean);
   await openConv(mid);
   for (const fid2 of forkIds) await api.deleteConv(fid2);
-  // 7f) 工作模式完成一項任務：完成數變多、最大的 session 到 5 萬以上 → 輸入框上方提示＋「重開 session」；
-  //     第一次讀到只記不提示、session 小不提示、按了清掉這個對話所有 session、提示消失。
-  //     進程檔的內容直接餵給 noteTasksDone（畫面這一側的判斷），session 大小在畫面這邊補
-  const tip = document.querySelector('#taskTip');
-  const wname = current.work?.name;
-  const tasksOf = n => ({ exists: true, name: wname, tasks: Array.from({ length: 3 }, (_, i) => ({ done: i < n })) });
-  tasksDone.delete(mid); taskTip = null;
-  current.sessions = { ...current.sessions, xcc: 'tip-s' }; current.sizes = { ...current.sizes, xcc: { tokens: 30000 } };
-  noteTasksDone(tasksOf(0));
-  const tipFirst = tip.classList.contains('hidden');
-  noteTasksDone(tasksOf(1));
+  // 7f) session 接近上限（用到上下文八成）：輸入框上方建議壓縮，按「壓縮」等於由那個 Agent 壓縮；「先不要」之後多用一成才再提。
+  //     session 大小在畫面這邊補；最後照原本的流程請主程序清掉 session，後面的檢查照原本的狀態跑
+  const tip = document.querySelector('#compressTip');
+  tipLater.clear();
+  current.sessions = { ...current.sessions, xcc: 'tip-s' }; current.sizes = { ...current.sizes, xcc: { tokens: 150000 } };
+  renderCompressTip();
   const tipSmall = tip.classList.contains('hidden');
-  current.sizes = { ...current.sizes, xcc: { tokens: 60000 } };
-  noteTasksDone(tasksOf(2));
-  out.taskTip = { work: !!wname, first: tipFirst, small: tipSmall, shown: !tip.classList.contains('hidden') && /60,000/.test(tip.textContent),
-    cjk: CJK.test(tip.textContent), same: (noteTasksDone(tasksOf(2)), !tip.classList.contains('hidden')) };
-  tip.querySelector('.btn').click();
-  let tipC;
-  for (let i = 0; i < 20; i++) { await wait(150); tipC = await api.getConv(mid); if (!Object.keys(tipC.sessions || {}).length) break; }
-  flush();
-  out.taskTip.reset = !Object.keys(tipC.sessions || {}).length && tip.classList.contains('hidden');
+  current.sizes = { ...current.sizes, xcc: { tokens: 165000 } };
+  renderCompressTip();
+  const tipText = tip.textContent;
+  out.taskTip = { small: tipSmall, shown: !tip.classList.contains('hidden') && /83%/.test(tipText) && /165k/.test(tipText),
+    agent: tip.querySelector('[data-act="compress"]').dataset.agent === 'xcc', cjk: CJK.test(tip.innerText.replace(LABEL.xcc, '')) };
+  tip.querySelector('[data-act="later"]').click();
+  out.taskTip.later = tip.classList.contains('hidden');
+  current.sizes = { ...current.sizes, xcc: { tokens: 190000 } };
+  renderCompressTip();
+  out.taskTip.again = !tip.classList.contains('hidden');
+  let tipAsked = '';
+  const tipKeep = window.confirmBox;   // 前面的壓縮測試換掉的確認視窗（記下問了什麼），測完換回去，後面的檢查還要用
+  window.confirmBox = async m => { tipAsked = m; return false; };
+  tip.querySelector('[data-act="compress"]').click(); await wait(300);
+  out.taskTip.asks = tipAsked.length > 0;   // 按了走壓縮的確認視窗（這裡答否，不真的壓縮）
+  window.confirmBox = tipKeep;
+  current = await api.updateConv(mid, { resetSessions: true }); renderConv(); flush();
+  out.taskTip.reset = tip.classList.contains('hidden');
   // 7g) 邊對話邊記索引：使用者的話有「note X」時，假 Claude 在回覆最後一行寫索引（主題 topic-X）。
   //     存在訊息的 note 上，那一行畫面與存檔都不留；下一輪的要求帶著上一輪的主題（假 Claude 回報 prev=）。
   //     壓縮時記到的直接用（主題相同、相鄰的合成一筆），只請 Agent 補沒記到的（xecho 那一輪）；全都記到了就不跑 Agent
@@ -705,7 +713,7 @@
   await openConv(mid); await refreshList();
   $('#moreBtn').click();
   const cm2 = $('#ctxMenu');
-  ux.more = !cm2.classList.contains('hidden') && !!cm2.querySelector('[data-act="reset"]') && !!cm2.querySelector('[data-act="delete"]') && !!cm2.querySelector('[data-act="rename"]');
+  ux.more = !cm2.classList.contains('hidden') && !cm2.querySelector('[data-act="reset"]') && !!cm2.querySelector('[data-act="delete"]') && !!cm2.querySelector('[data-act="rename"]');
   ux.moreCjk = CJK.test(cm2.innerText.replace(/[A-Z]$/gm, ''));
   hideCtx();
   $('#modeBtn').click();

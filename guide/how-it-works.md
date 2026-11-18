@@ -33,7 +33,7 @@ If another chat in the same folder is running in work mode, AgentDesk asks befor
 
 **New chat** or Ctrl+N reuses a new chat you have not sent anything in yet instead of creating another one. New chats with no messages are not listed in the sidebar.
 
-Pick the working folder from the folder menu above the input box before the first message. After that it stays fixed: the top bar shows only the folder name, and clicking it opens the folder in File Explorer. Rename, fresh sessions for all agents, archive and delete are in the ⋯ menu in the top bar, and in the sidebar's right-click menu.
+Pick the working folder from the folder menu above the input box before the first message. After that it stays fixed: the top bar shows only the folder name, and clicking it opens the folder in File Explorer. Pin, rename, archive and delete are in the ⋯ menu in the top bar, and in the sidebar's right-click menu.
 
 ## Shared context
 
@@ -85,15 +85,16 @@ Measured results are in [benchmarks.md](benchmarks.md).
 
 When you switch to work mode you can name the work. AgentDesk creates `docs/進程/<work name>.md` in the working folder: task list, progress, decisions and verification. AgentDesk tells the agent to list the tasks first, wait for your approval, and update the file on turns that make progress. **Resume work** above the input box picks up an existing progress file in a new chat, and **Work status** in the right panel shows the resume notes and tasks.
 
-When one more task is marked done and the largest session in the chat is 50,000 tokens or more, a line above the input box suggests **Restart sessions**. The state lives in the progress file, so restarting loses nothing. For a small fix, choose **No progress file**.
+For a small fix, choose **No progress file**.
 
 ## Agent activity panel
 
 The right panel shows the current chat only: whether each agent is idle or working, what it is doing, and work finished recently.
 
 - **Remaining usage** (5-hour and weekly): Claude updates after every reply, Codex is read every 5 minutes, Cursor does not report it.
-- **Session size**: the tokens re-sent on every later turn at minimum. Exact for Claude, estimated for Codex and Cursor. Above 100,000 it is flagged and **Compress** appears on the card.
-- **Restart** clears that agent's session in this chat.
+- **Session size**: the tokens re-sent on every later turn at minimum, and the share of the model's context it uses (for example "session 511k/1M (51%)"). The size is exact for Claude and the context size is what Claude reports; Codex and Cursor sizes are estimates, with the context assumed to be 200k (marked "~").
+- **Compress suggestion**: when any agent uses 80% of its context, the card says it is near the limit and shows **Compress**, and a line above the input box suggests it too; one click compresses. Beyond that the CLI summarizes on its own or runs out of room, and earlier details get lost. After **Not now**, it comes back once that agent uses another 10%.
+- There is no **Restart** button: compress long chats to save usage. AgentDesk clears sessions by itself only when needed (an invalid session, Cursor moving from read-only to writable, after compressing).
 - Below 1,100 px of window width the right panel hides itself and comes back when the window is wider; ▤ in the top bar shows it anyway.
 - **Usage**: each reply shows that turn's tokens (input including cache, plus output) next to the agent name, with the cost when the CLI reports one (Claude, at API prices). The panel shows the total for this chat. Codex and Antigravity report running totals per session, so AgentDesk subtracts the previous turn; the first turn after an AgentDesk update in an existing session shows nothing.
 

@@ -891,6 +891,9 @@ async function integrationTests() {
     const r2 = await go(cfg, 'again', r1.sessionId);
     assert(r1.kind === 'claude' && r1.sessionId === 'cc-1' && /session=cc-1/.test(r2.text), `${r1.kind} ${r1.sessionId} ${r2.text}`);
     assert(sessionSize(r1).tokens === 40107, JSON.stringify({ last: r1.lastUsage, usage: r1.usage }));
+    // result 的 modelUsage 有好幾個模型時，上下文大小取主模型（init 的 model）那一筆，不是最大的
+    const r3 = await go(cfg, 'window please');
+    assert(r3.window === 1000000 && sessionSize(r3).window === 1000000 && !r1.window, JSON.stringify({ r3: r3.window, r1: r1.window }));
   });
   await check('執行：停止能砍掉執行中的 Agent', async () => {
     const run = runAgent('xt', custom('fake-slow.js', { format: 'text' }), { prompt: '', cwd, onEvent: () => {} });
@@ -937,6 +940,14 @@ async function integrationTests() {
       && parseChoices('說明 `[[agentdesk:choices]]` 的格式') === null && stripMark('ans\n[[agentdesk:choices]] a｜b', true).trim() === 'ans', JSON.stringify(parseChoices(txt)));
     const main = readSrc('main.js');
     assert(/if \(role === 'main'\) \{\s*\n\s*if \(agent === 'claude'\) notes\.system = \[notes\.system, choiceNote\(tr\)\]/.test(main), '選項要求只該給主對話的 Agent');
+  });
+  await check('session 大小帶上模型的上下文大小（Claude result 的 modelUsage.contextWindow）', () => {
+    const { sessionSize } = require(path.join(SRC, 'agents.js'));
+    const s1 = sessionSize({ kind: 'claude', lastUsage: { input_tokens: 10, cache_read_input_tokens: 500000 }, window: 1000000 });
+    const s2 = sessionSize({ kind: 'claude', lastUsage: { input_tokens: 10 } });
+    const ag = fs.readFileSync(path.join(SRC, 'agents.js'), 'utf8'), main = readSrc('main.js');
+    assert(s1?.tokens === 500010 && s1.window === 1000000 && s2 && !('window' in s2) && ag.includes('evt.modelUsage') && ag.includes('window: state.window')
+      && main.includes('if (s && !s.window && conv.sizes?.[agent]?.window) s.window = conv.sizes[agent].window;'), JSON.stringify({ s1, s2 }));
   });
   await check('Claude API 備用：看出額度用完（事件或錯誤文字）、每週／5 小時、要不要切、剩餘額度；金鑰不給畫面', () => {
     const b = require(path.join(SRC, 'billing.js'));
@@ -1110,8 +1121,8 @@ async function e2eTests() {
     assert(!w1.tight && w1.shown === 6 && !w2.tight && w2.shown === 6 && w3.tight && w3.shown === 4 && w4.tight && w4.shown === 4, JSON.stringify(r.topbar));
     return `主欄 ${[w1, w2, w3, w4].map(w => w.main).join('／')}px`;
   });
-  await check('畫面：右欄卡片顯示 session 大小、超過門檻提醒並多一顆壓縮、工作中壓灰、只讓一個 Agent 重開', () => { const z = r.size || {};
-    assert(z.stored === 40107 && z.session === 'cc-1' && z.shown && z.notBig && z.cjk === false && z.none && z.noCompress && z.big && z.bigCjk === false && z.compressBtn
+  await check('畫面：右欄卡片顯示 session 用了上下文幾成（CLI 回報的上下文大小，沒有就以 200k 估）、用到八成提醒並多一顆壓縮、工作中壓灰、沒有「重開」', () => { const z = r.size || {};
+    assert(z.stored === 40107 && z.session === 'cc-1' && z.shown && z.notBig && z.cjk === false && z.none && z.noCompress && z.window && z.big && z.bigCjk === false && z.compressBtn
       && z.offWhenRunning && z.onWhenIdle && z.reset, JSON.stringify(z)); });
   await check('畫面：訊息下方有時間與複製，Agent 的訊息多一顆分支；右鍵選單有同樣的功能', () => { const f = r.msgFoot || {};
     assert(f.user && f.agent && f.cjk === false && f.copyUser && f.menu && f.menuCjk === false && f.copyAgent, JSON.stringify(f)); });
@@ -1137,7 +1148,7 @@ async function e2eTests() {
     const lines = idxEn.split('\n').filter(l => /^#\d/.test(l)), half = Math.floor((1 + u1) / 2);
     assert(k.enabled && k.hadSession && k.btnCjk === false && k.note && k.noteCjk === false && k.noteGone && k.running && k.asked && k.askCjk === false
       && k.done && k.mark && k.markCjk === false && k.btnOff && k.info, JSON.stringify(k));
-    // 接續與否：大小不知道的 xagy 接續（確認視窗沒有「開新的 session」那句）；15 萬 tokens 的 xcc 不接續（有那句）
+    // 接續與否：大小不知道的 xagy 接續（確認視窗沒有「開新的 session」那句）；17 萬 tokens 的 xcc 不接續（有那句）
     assert(k.resumeInfo && k.askResume && k.bigInfo, JSON.stringify({ resumeInfo: k.resumeInfo, askResume: k.askResume, bigInfo: k.bigInfo }));
     // 壓完那一行：範圍、補了佔位的段落，英文介面沒有中文
     assert(k.summary && k.summaryCjk === false, k.summaryText);
@@ -1164,9 +1175,9 @@ async function e2eTests() {
     assert(s.saved && s.stripped && s.prev && s.echoNone && s.info && s.res && s.all && s.allAsk && s.cjk === false, JSON.stringify(s));
     return s.summary;
   });
-  await check('畫面：工作模式完成一項任務、session 偏大時提示重開（第一次只記、小 session 不提示、按了清掉 session）', () => {
+  await check('畫面：session 用到上下文八成時輸入框上方建議壓縮（未到不提、先不要之後多一成才再提、按了走壓縮）', () => {
     const k = r.taskTip || {};
-    assert(k.work && k.first && k.small && k.shown && k.cjk === false && k.same && k.reset, JSON.stringify(k));
+    assert(k.small && k.shown && k.agent && k.cjk === false && k.later && k.again && k.asks && k.reset, JSON.stringify(k));
   });
   await check('畫面：設定頁偵測與存檔不卡', () => {
     assert(r.settingsConn.xecho === 'ok' && r.settingsConn.xagy === 'ok', JSON.stringify(r.settingsConn));

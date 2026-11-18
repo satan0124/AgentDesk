@@ -265,6 +265,8 @@ function freshIfStuck(conv, agent) {
 // 一輪跑完：記下這個 Agent 的 session 現在大約多大（右欄卡片顯示，算法見 agents.js 的 sessionSize）
 function noteSize(conv, agent, r, resumed) {
   const s = sessionSize(r, resumed ? conv.sizes?.[agent] : undefined, resumed);
+  // 這一輪沒回報上下文大小時沿用上一輪記的
+  if (s && !s.window && conv.sizes?.[agent]?.window) s.window = conv.sizes[agent].window;
   if (s && conv.sessions[agent]) conv.sizes = { ...(conv.sizes || {}), [agent]: s };
 }
 // 告訴畫面這個對話各 Agent 的 session 與大小有變

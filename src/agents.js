@@ -107,6 +107,7 @@ function claudeParser(emit, state) {
   return evt => {
     switch (evt.type) {
       case 'system':
+        if (evt.subtype === 'init' && evt.model) state.model = evt.model;
         if (evt.subtype === 'init' && evt.session_id) emit({ type: 'session', id: evt.session_id, model: evt.model });
         break;
       case 'stream_event': {
@@ -168,6 +169,12 @@ function claudeParser(emit, state) {
         // 出錯時的 result 是錯誤訊息：不當成回覆文字串流出去（額度用完改用 API 重跑時，畫面才不會留著那句錯誤）
         if (!state.streamed && evt.result && !evt.is_error) emit({ type: 'text', text: evt.result });
         state.usage = evt.usage; state.cost = evt.total_cost_usd;
+        // 模型的上下文大小：session 用了幾成、什麼時候該壓縮。modelUsage 每個用到的模型一筆 contextWindow
+        // （2026-11-18 用 Claude Code 2.1.310、Haiku 5.5 實測：{"claude-haiku-5-5":{…,"contextWindow":1000000}}）。
+        // 子代理可能用別的模型，取主模型（init 的 model）那一筆；對不上才取最大的
+        const mu = evt.modelUsage || {}, main = mu[state.model] || Object.values(mu).find(m => m?.canonicalModel === state.model);
+        const win = Number(main?.contextWindow) || Math.max(0, ...Object.values(mu).map(m => Number(m?.contextWindow) || 0));
+        if (win) state.window = win;
         // 被擋下的工具呼叫（-p 沒有人能回答詢問時自動拒絕）：對話模式用來判斷「想改檔」
         if (evt.permission_denials?.length) {
           state.denials = evt.permission_denials.map(d => ({ tool: d.tool_name, detail: short(toolDetail(d.tool_name, d.tool_input || {}), 160) }));
@@ -383,7 +390,7 @@ function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt,
         error = tr('{name} 結束碼 {code}', { name: labelOf(agent, cfg), code }) + (tail ? '\n' + tail : '');
       }
       resolve({ text: collected.trim() || state.final || '', final: state.final || '', sessionId: state.session || sessionId,
-        error, usage: state.usage, cost: state.cost, denials: state.denials, kind, lastUsage: state.lastUsage, steps: state.steps || 0, limitHit: state.limitHit });
+        error, usage: state.usage, cost: state.cost, denials: state.denials, kind, lastUsage: state.lastUsage, steps: state.steps || 0, limitHit: state.limitHit, window: state.window });
     });
     child.stdin.on('error', () => {});
     child.stdin.end(cmd.stdin ?? '', 'utf8');
@@ -409,14 +416,15 @@ async function explainModel(agent, cfg, r) {
 //   Cursor：result 的 usage 是這一輪各請求的加總，inputTokens 不含快取 → （輸入＋快取）÷ 請求數，是估的
 //   其他格式（自訂 Agent）：沒有量過，不顯示
 // r：runAgent 的結果；prev：上一輪記下的 { tokens, total }；resumed：這一輪是不是接續既有的 session
-// 回傳 { tokens, total? }，tokens 算不出來時是 null；完全沒有資料回傳 null
+// 回傳 { tokens, total?, window? }，tokens 算不出來時是 null；完全沒有資料回傳 null。
+// window：模型的上下文大小，只有 Claude 回報（result 的 modelUsage），其他的畫面用預設值
 function sessionSize(r, prev, resumed) {
   const u = r?.usage || {};
   const sum = (o, keys) => keys.reduce((s, k) => s + (Number(o?.[k]) || 0), 0);
   const reqs = (r?.steps || 0) + 1;
   if (r?.kind === 'claude') {
     const t = sum(r.lastUsage || u, ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens']);
-    return t ? { tokens: t } : null;
+    return t ? { tokens: t, ...(r.window ? { window: r.window } : {}) } : null;
   }
   if (r?.kind === 'codex') {
     const total = sum(u, ['input_tokens']);

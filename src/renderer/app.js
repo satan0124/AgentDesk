@@ -152,13 +152,12 @@ let menuConv = null, menuMsg = null, menuSel = '';
 function hideCtx() { $('#ctxMenu').classList.add('hidden'); menuConv = null; menuMsg = null; }
 // 選單上按了哪一項：訊息的選單（showMsgMenu）走 msgAction，對話清單的走 convAction
 const ctxPick = act => (menuMsg ? msgAction(act, menuMsg, menuSel) : convAction(act, menuConv));
-// top：從頂列的「⋯」開的（目前這個對話），多一項重開 session，重新命名改在頂列的標題上
+// top：從頂列的「⋯」開的（目前這個對話），重新命名改在頂列的標題上
 let menuTop = false;
 function showConvMenu(c, x, y, top = false) {
   const items = c.archived
     ? [['unarchive', '取消封存', 'A'], ['rename', '重新命名', 'R'], ['delete', '刪除', 'D']]
     : [[c.pinned ? 'unpin' : 'pin', c.pinned ? '取消釘選' : '釘選', 'P'], ['rename', '重新命名', 'R'], ['archive', '封存', 'A'], ['delete', '刪除', 'D']];
-  if (top) items.splice(-1, 0, ['reset', '讓所有 Agent 重開 session', 'S']);
   menuTop = top;
   const m = $('#ctxMenu');
   m.innerHTML = items.map(([act, label, key]) => `<button data-act="${act}" data-key="${key}"${act === 'delete' ? ' class="danger"' : ''}>${esc(t(label))}<kbd>${key}</kbd></button>`).join('');
@@ -174,7 +173,6 @@ async function convAction(act, c) {
   if (!c) return;
   if (act === 'pin' || act === 'unpin') await api.updateConv(c.id, { pinned: act === 'pin' });
   else if (act === 'archive' || act === 'unarchive') await api.updateConv(c.id, { archived: act === 'archive' });
-  else if (act === 'reset') await resetAllSessions();
   else if (act === 'rename') top && current?.id === c.id ? editTitle() : renameInList(c);
   else if (act === 'delete') await deleteConvById(c.id, c.title);
 }
@@ -546,7 +544,7 @@ function updateComposer() {
   updateSuggestion();
   renderMode();
   renderCompress();
-  renderTaskTip();
+  renderCompressTip();
 }
 
 // ---------- 確認與提示視窗 ----------
@@ -728,39 +726,39 @@ async function refreshWork() {
   const data = id && current.work ? await api.readWork(id) : null;
   if (current?.id !== id) return;
   workInfo = data ? { ...data, convId: id } : null;
-  noteTasksDone(data);
   renderWork();
 }
 
-// ---------- 工作模式：完成一項任務時提示重開 session ----------
-// 狀態都記在進程檔裡，這時重開 session 幾乎不損失什麼，之後每一輪不用再重送整個 session。
-// 每個對話記下上一次讀到的完成數（第一次讀到只記不提示）；變多了、而且最大的 session 到 TIP_MIN 以上，
-// 就在輸入框上方顯示一行提示與「重開 session」。送出下一則訊息（訊息數變了）或按了之後就消失
-const TIP_MIN = 50000;
-const tasksDone = new Map();   // 對話 id → { name, done }
-let taskTip = null;            // { id, at（當時的訊息數）, tokens }
-function noteTasksDone(data) {
-  if (!current || !data?.exists) return;
-  const done = data.tasks.filter(x => x.done).length;
-  const prev = tasksDone.get(current.id);
-  tasksDone.set(current.id, { name: data.name, done });
-  if (!prev || prev.name !== data.name || done <= prev.done) return;
-  const tokens = Math.max(0, ...Object.values(current.sizes || {}).map(s => s?.tokens || 0));
-  if (tokens >= TIP_MIN && Object.keys(current.sessions || {}).length) taskTip = { id: current.id, at: current.messages.length, tokens };
-  renderTaskTip();
+// ---------- session 接近上限：輸入框上方建議壓縮 ----------
+// 任何一個 Agent 的 session 用到模型上下文的 COMPRESS_AT（八成）就提示，寫出用了多少、為什麼要壓縮，按了等於頂列的 🗜（由那個 Agent 寫索引）。
+// 按「先不要」之後，同一個 Agent 再多用一成才再提
+const tipLater = new Map();   // `${對話 id}:${agent}` → 按「先不要」時用了幾成
+function compressTipAgent() {
+  if (!current?.messages.length || isRunning()) return null;
+  let best = null;
+  for (const a of Object.keys(current.sessions || {})) {
+    const s = sessionOf(a), later = tipLater.get(`${current.id}:${a}`);
+    if (!s?.big || !settings?.agents[a]?.enabled || (later !== undefined && s.pct < later + 10)) continue;
+    if (!best || s.pct > best.s.pct) best = { a, s };
+  }
+  return best;
 }
-function renderTaskTip() {
-  const on = !!taskTip && taskTip.id === current?.id && taskTip.at === current.messages.length && !isRunning() && Object.keys(current.sessions || {}).length > 0;
-  $('#taskTip').classList.toggle('hidden', !on);
-  if (!on) return;
-  $('#taskTip .t').textContent = t('完成了一項任務。進度都記在進程檔裡，現在重開各 Agent 的 session 可以省額度（目前最大的 {n} tokens）。', { n: taskTip.tokens.toLocaleString() });
-  $('#taskTip .btn').textContent = t('重開 session');
+function renderCompressTip() {
+  const hit = compressTipAgent();
+  $('#compressTip').classList.toggle('hidden', !hit);
+  if (!hit) return;
+  const { a, s } = hit;
+  $('#compressTip .t').textContent = t('{name} 的 session 已經用了上下文的 {pct}%（{n}／{win}）。再大下去，CLI 會自己摘要或塞不下，前面的細節容易丟掉。建議壓縮：之後每一輪只附索引與最近幾則原文，需要細節時 Agent 會回去讀原文。',
+    { name: LABEL[a], pct: s.pct, n: fmtTokens(s.n), win: (s.guess ? '~' : '') + fmtTokens(s.win) });
+  $('#compressTip [data-act="compress"]').dataset.agent = a;
 }
-$('#taskTip .btn').onclick = async () => {
-  if (!current || isRunning()) return;
-  taskTip = null;
-  current = await api.updateConv(current.id, { resetSessions: true });
-  renderConv();
+$('#compressTip').onclick = e => {
+  const b = e.target.closest('[data-act]');
+  if (!b || !current) return;
+  if (b.dataset.act === 'compress') return compressWith(b.dataset.agent);
+  const hit = compressTipAgent();
+  if (hit) tipLater.set(`${current.id}:${hit.a}`, hit.s.pct);
+  renderCompressTip();
 };
 function renderWork() {
   const d = current?.work && workInfo?.convId === current.id && workInfo.name === current.work.name ? workInfo : null;
@@ -1234,7 +1232,7 @@ function billingHtml(a) {
   }
   if (!b.hasKey) return '';
   return `<div class="bill sub"><span class="t">${esc(t('API 備用已設定'))}${typeof b.remaining === 'number' ? ' · ' + esc(billingLeft(b)) : ''}</span>`
-    + `<button class="sess-reset" data-bill="api" title="${esc(t('不等額度用完，現在就改用 Claude API'))}">${esc(t('改用 API'))}</button></div>`;
+    + `<button class="bill-btn" data-bill="api" title="${esc(t('不等額度用完，現在就改用 Claude API'))}">${esc(t('改用 API'))}</button></div>`;
 }
 async function switchBilling(mode) {
   if (mode === 'api' && !await confirmBox(t('改用 Claude API？之後 Claude 每一輪都扣 API 額度，直到你切回訂閱。'))) return;
@@ -1243,34 +1241,37 @@ async function switchBilling(mode) {
   agentStatus = await api.agentStatus();
   renderAgentPanel(); renderAgentInfo();
 }
-// session 大小：這個 Agent 在這個對話的 session 現在約多少 tokens（之後每一輪至少要重送這麼多）。
-// 主程序每輪跑完記在 conv.sizes，算法見 agents.js 的 sessionSize；超過 SESSION_WARN 就提醒重開
-const SESSION_WARN = 100000;
+// session 大小：這個 Agent 在這個對話的 session 現在約多少 tokens（之後每一輪至少要重送這麼多），佔模型上下文的幾成。
+// 主程序每輪跑完記在 conv.sizes（算法見 agents.js 的 sessionSize）；上下文大小 Claude 有回報（window），其他用 DEFAULT_WINDOW 估。
+// 用到 COMPRESS_AT（八成）就提醒壓縮：再大下去 CLI 會自己摘要或塞不下
+const DEFAULT_WINDOW = 200000, COMPRESS_AT = 0.8;
 function fmtTokens(n) {
-  return n < 1000 ? String(n) : n < 100000 ? (n / 1000).toFixed(1) + 'k' : n < 1e6 ? Math.round(n / 1000) + 'k' : (n / 1e6).toFixed(2) + 'M';
+  return n < 1000 ? String(n) : n < 100000 ? (n / 1000).toFixed(1) + 'k' : n < 1e6 ? Math.round(n / 1000) + 'k' : (n / 1e6).toFixed(n % 1e6 ? 2 : 0) + 'M';
+}
+// 這個 Agent 的 session：{ n, win, pct, guess（上下文大小是估的）, big }；沒有 session 或大小未知回 null
+function sessionOf(a, c = current) {
+  const s = c?.sessions?.[a] && c.sizes?.[a];
+  if (typeof s?.tokens !== 'number') return null;
+  const win = s.window || DEFAULT_WINDOW;
+  return { n: s.tokens, win, pct: Math.round(s.tokens / win * 100), guess: !s.window, big: s.tokens >= win * COMPRESS_AT };
 }
 function sessionHtml(a) {
   if (!current?.sessions?.[a]) return '';
-  const n = current.sizes?.[a]?.tokens;
-  const known = typeof n === 'number', big = known && n >= SESSION_WARN;
-  // 回合在跑或正在壓縮時這兩顆不能按（按了也不會動），壓灰
+  const s = sessionOf(a);
+  // 回合在跑或正在壓縮時「壓縮」不能按（按了也不會動），壓灰
   const off = isRunning() ? 'disabled' : '';
-  return `<div class="sess ${big ? 'big' : ''}" title="${esc(t('這個 Agent 在這個對話的 session 大小，之後每一輪至少要重送這麼多。Claude 的數字是準的，Codex、Cursor 是估的。'))}">`
-    + `<span class="t">${esc(known ? t('session 約 {n} tokens', { n: fmtTokens(n) }) : t('session：大小未知'))}${big ? ` · ${esc(t('偏大，壓縮對話或重開可以省額度'))}` : ''}</span>`
-    // 偏大時多一顆「壓縮」：和頂列的 🗜 同一件事，由這張卡片的 Agent 寫索引
-    + (big ? `<button class="sess-compress" data-compress="${a}" ${off} title="${esc(t('壓縮對話：請 {name} 替對話寫索引，之後清掉各 Agent 的 session。寫索引會花 {name} 一輪的額度。', { name: LABEL[a] }))}">${esc(t('壓縮'))}</button>` : '')
-    + `<button class="sess-reset" data-reset="${a}" ${off} title="${esc(t('讓 {name} 在這個對話重開 session（對話記錄保留）', { name: LABEL[a] }))}">${esc(t('重開'))}</button></div>`;
-}
-async function resetSession(a) {
-  if (!current || isRunning()) return;
-  if (!await confirmBox(t('讓 {name} 在這個對話重開 session？\n對話記錄會保留，下一次送出時當作參考帶給它。', { name: LABEL[a] }))) return;
-  current = await api.updateConv(current.id, { resetSession: a });
-  renderAgentPanel();
+  const tip = t('這個 Agent 在這個對話的 session 大小，之後每一輪至少要重送這麼多。Claude 的數字是準的，Codex、Cursor 是估的。')
+    + (s?.guess ? '\n' + t('這個 CLI 沒有回報模型的上下文大小，以 {win} 估。', { win: fmtTokens(DEFAULT_WINDOW) }) : '');
+  return `<div class="sess ${s?.big ? 'big' : ''}" title="${esc(tip)}">`
+    + `<span class="t">${esc(s ? t('session {n}／{win}（{pct}%）', { n: fmtTokens(s.n), win: (s.guess ? '~' : '') + fmtTokens(s.win), pct: s.pct }) : t('session：大小未知'))}${s?.big ? ` · ${esc(t('接近上限，建議壓縮'))}` : ''}</span>`
+    // 接近上限時多一顆「壓縮」：和頂列的 🗜 同一件事，由這張卡片的 Agent 寫索引
+    + (s?.big ? `<button class="sess-compress" data-compress="${a}" ${off} title="${esc(t('壓縮對話：請 {name} 替對話寫索引，之後清掉各 Agent 的 session。寫索引會花 {name} 一輪的額度。', { name: LABEL[a] }))}">${esc(t('壓縮'))}</button>` : '')
+    + '</div>';
 }
 api.on('conv:meta', ({ convId, sessions, sizes }) => {
   if (current?.id !== convId) return;
   current.sessions = sessions; current.sizes = sizes;
-  renderAgentPanel();
+  renderAgentPanel(); renderCompressTip();
 });
 // 右欄只看目前這個對話的 Agent
 function renderAgentPanel() {
@@ -1375,8 +1376,6 @@ async function setConvAgentCfg(a, patch) {
 $('#agentCards').addEventListener('click', e => {
   const bill = e.target.closest('[data-bill]');
   if (bill) return switchBilling(bill.dataset.bill);
-  const reset = e.target.closest('.sess-reset');
-  if (reset) return resetSession(reset.dataset.reset);
   const comp = e.target.closest('.sess-compress');
   if (comp) return compressWith(comp.dataset.compress);
   const p = e.target.closest('.perm-btn[data-perm]');
@@ -1490,11 +1489,6 @@ $('#cwdMenu').onclick = async e => {
 };
 document.addEventListener('click', e => { if (!e.target.closest('.cwd-pick')) closeCwdMenu(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#cwdMenu').classList.contains('hidden')) closeCwdMenu(); });
-async function resetAllSessions() {
-  if (!current || isRunning() || !await confirmBox(t('讓 Claude / Codex / Cursor 下一次都開新 session？\n畫面上的對話記錄會保留，並在下一次送出時當作參考帶給 Agent。'))) return;
-  current = await api.updateConv(current.id, { resetSessions: true });
-  renderAgentPanel();
-}
 async function deleteConvById(id, title) {
   if (!await confirmBox(t('刪除「{title}」？此動作無法復原。', { title: t(title) }))) return;
   await api.deleteConv(id);

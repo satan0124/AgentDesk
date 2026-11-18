@@ -21,7 +21,7 @@ AgentDesk puts Claude Code, Codex CLI, Cursor Agent CLI and other CLI agents you
 - **Delegate and see the work.** Claude can hand a task to Codex or Cursor. A card shows their steps and result as they happen.
 - **Keep long conversations manageable.** Compress a growing session into a searchable index while the full conversation stays available in a numbered transcript. In our tests, tokens re-sent per request went from 205,000–653,000 to under 65,000.
 - **Spend fewer tokens.** Turn on the "save tokens" rule for any agent: no narration or restating, while bad news is still reported. In our tests output tokens dropped by over 40%, and investigation questions that read many files used about half the total tokens.
-- **Continue work across sessions.** In work mode a progress file keeps tasks, decisions and verification results, so a new chat or a restarted session can pick up the work.
+- **Continue work across sessions.** In work mode a progress file keeps tasks, decisions and verification results, so a new chat or a compressed one can pick up the work.
 - **Separate discussion from execution.** Start in chat mode with editing restrictions, then switch to work mode when you are ready to let agents modify files.
 
 ## Quick start
@@ -63,7 +63,7 @@ Delegated agents follow the chat's mode, so in chat mode the same read-only limi
 **Context and continuity**
 
 - Compression with an index written as you chat; details stay in a numbered transcript of the whole chat.
-- Progress files live in your project under `docs/進程/`; **Resume work** opens one from a new chat, and a hint suggests restarting sessions after a task is done.
+- Progress files live in your project under `docs/進程/`; **Resume work** opens one from a new chat.
 - Branch a new chat from any agent message.
 
 **Workflow and control**
@@ -74,7 +74,7 @@ Delegated agents follow the chat's mode, so in chat mode the same read-only limi
 - When an agent asks you to decide, its suggested answers show as buttons, and the first one is in the input box ready for Tab.
 - In work mode Claude can stop and ask you to allow a command or edit.
 - With a Claude API key set, Claude moves to the API when your weekly subscription limit runs out; the card shows the estimated API balance, and one click switches back once the limit resets.
-- The right panel shows each agent's status, session size and remaining quota, with **Restart**, plus **Compress** when a session gets large.
+- The right panel shows each agent's status, remaining quota and how much of its context the session uses; at 80% it suggests compressing, which takes one click.
 - **Environment check** in Settings checks Node.js, whether each CLI is installed and signed in, and whether the working folders are writable, with a fix for each problem.
 - An optional "save tokens" rule per agent: no narration, answer at the end, no repetition.
 
