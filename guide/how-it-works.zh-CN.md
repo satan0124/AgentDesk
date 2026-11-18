@@ -97,6 +97,21 @@ flowchart LR
 - 窗口宽度不到 1,100 px 时右栏自动收起，拉宽后再打开；收起时点顶栏的 ▤ 也能打开。
 - **用量**：每条回复的名字旁边显示这一轮的 tokens（输入含缓存，加上输出），CLI 有报告费用时一起显示（Claude，API 价格）。右栏显示这个对话的加总。Codex 和 Antigravity 报告的是整个 session 的累计，AgentDesk 会减掉上一轮；更新 AgentDesk 后，原来 session 的第一轮不显示。
 
+## Claude API 备用
+
+在设置的“Claude API（备用）”填 API 密钥后，订阅的每周额度用完时，Claude 会改用 API 继续。设置里可以改成 5 小时额度用完也切换，或关掉自动切换。
+
+- **怎么切换**：已经登录订阅账户时，Claude CLI 就算拿到密钥也照样用登录的账户（2026-11-18 用 Claude Code 2.1.310、假密钥实测）。所以 API 模式的 Claude 改用另一个设置文件夹 `%APPDATA%\AgentDesk\claude-api\`（`CLAUDE_CONFIG_DIR`）：里面没有登录凭据，只能用密钥；`~/.claude` 的子文件夹（session、skills、plugins）用 junction 指回原处，`CLAUDE.md`、`settings.json` 复制过来，所以切换前后的 session 接得上。claude.ai 账户才有的连接器与内置技能在 API 模式用不到。
+- **什么时候切换**：
+  - 回合因为额度用完而失败时，同一条消息改用 API 重跑一次。一开始就被挡，就整段重发；做到一半才挡，就请 Claude 接着做。
+  - 右栏记录的每周额度已经用完时，下一轮一开始就改用 API。
+  - 判断依据是 Claude CLI 的 `rate_limit_event`（被挡时 status 是 rejected），没有这个事件时看错误信息。这两种信号是按 CLI 的事件格式写的，还没有真的把订阅额度用完测试过。
+- **提示**：切换时消息里会多一行说明，右栏的 Claude 卡片会显示“正在用 Claude API”、为什么切换、API 约剩多少、订阅额度预计什么时候恢复。
+- **切回来**：不会自动切回，点卡片上的“切回订阅”。到了恢复时间，卡片会变绿色提醒你。订阅模式下设置了密钥时，卡片上也有“改用 API”可以手动切过去。
+- **剩余额度**：Anthropic 没有提供查询 API 余额的公开接口，所以要自己到 Claude Console 的 Billing 页面看余额，填进设置。之后 AgentDesk 用 Claude CLI 报告的费用往下扣，显示的是估计值。
+- **密钥**：用 Electron 的 safeStorage 加密（Windows 是 DPAPI）保存在 `settings.json`，界面只拿得到末 4 位，不能加密的电脑不会保存。Claude 要密钥时执行 `apiKeyHelper`：一个用 node 运行的小程序，向 AgentDesk 的本机服务要，只有 API 模式的 Claude 正在运行时才拿得到。密钥不放进环境变量，Claude 执行的命令运行 `env`、`set` 时看不到。这挡得住不小心泄露，挡不住刻意找密钥的程序：同一个 Windows 账户下的程序都能解开 DPAPI，也能照着小程序去要。电脑上找不到 node 时，才退回用环境变量 `ANTHROPIC_API_KEY`。
+- 压缩时 Claude 写索引也按当前的计费方式运行，但不会自动切换。委派出去的 Agent 不受影响。
+
 ## 自定义 Agent
 
 设置最下方的“添加其他 CLI Agent”有三种模板：Antigravity CLI（`agy`）、Claude 兼容 stream-json、通用 CLI（纯文本）。可以设置命令、参数、prompt 传入方式、输出格式、模型、续接 session 标志，以及给 Claude 的说明。

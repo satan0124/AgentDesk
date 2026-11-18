@@ -29,12 +29,14 @@ function short(v, n = 200) {
 }
 
 // ---------- 指令組成 ----------
-function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images = [], addDirs = [], allowedTools = [], permissionPromptTool }) {
+// settingsFile：Claude 的 --settings（API 模式放 apiKeyHelper，見 apihome.js）；主程序只替用 API 跑的 Claude 帶，驗證時是假 Claude
+function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images = [], addDirs = [], allowedTools = [], permissionPromptTool, settingsFile }) {
   const base = resolveCli(cfg.cli || agent);
   if (!base) throw new Error(tr('找不到 {name} CLI：{cli}（請到設定檢查 CLI 路徑）', { name: labelOf(agent, cfg), cli: cfg.cli || agent }));
   const args = [];
   if (cfg.custom) {
     args.push(...splitArgs(cfg.args).map(a => a.split('{cwd}').join(cwd)));
+    if (settingsFile) args.push('--settings', settingsFile);
     if (cfg.model && cfg.modelFlag) args.push(cfg.modelFlag, cfg.model);
     if (cfg.effort && cfg.effortFlag) args.push(cfg.effortFlag, cfg.effort);
     if (sessionId && cfg.resumeFlag) args.push(cfg.resumeFlag, sessionId);
@@ -71,6 +73,7 @@ function buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, 
     // 工作模式要問的工具（改檔、指令）改由這個 MCP 工具問使用者（AgentDesk 畫面上按允許／拒絕），不再一律拒絕；
     // 2026-11 用真的 Claude 試過：參數是 { tool_name, input, tool_use_id }，回 {"behavior":"allow","updatedInput":…} 或 {"behavior":"deny","message":…}
     if (permissionPromptTool && !cfg.readOnly) args.push('--permission-prompt-tool', permissionPromptTool);
+    if (settingsFile) args.push('--settings', settingsFile);
   } else if (agent === 'codex') {
     args.push('exec');
     if (sessionId) args.push('resume', sessionId);
@@ -154,13 +157,16 @@ function claudeParser(emit, state) {
       case 'rate_limit_event': {
         const windows = claudeWindows(evt.rate_limit_info);
         if (windows.length) emit({ type: 'limits', windows });
+        // 額度用完被擋下：記下是哪一個額度（billing.js 的 limitHit 用來決定要不要改用 Claude API）
+        if (evt.rate_limit_info?.status === 'rejected') state.limitHit = evt.rate_limit_info.rateLimitType || 'unknown';
         break;
       }
       case 'result':
         state.final = evt.result;
         if (evt.session_id) emit({ type: 'session', id: evt.session_id });
         if (evt.is_error) state.error = evt.result || evt.subtype || 'Claude error';
-        if (!state.streamed && evt.result) emit({ type: 'text', text: evt.result });
+        // 出錯時的 result 是錯誤訊息：不當成回覆文字串流出去（額度用完改用 API 重跑時，畫面才不會留著那句錯誤）
+        if (!state.streamed && evt.result && !evt.is_error) emit({ type: 'text', text: evt.result });
         state.usage = evt.usage; state.cost = evt.total_cost_usd;
         // 被擋下的工具呼叫（-p 沒有人能回答詢問時自動拒絕）：對話模式用來判斷「想改檔」
         if (evt.permission_denials?.length) {
@@ -327,7 +333,7 @@ function antigravityParser(emit, state) {
 const PARSERS = { claude: claudeParser, codex: codexParser, cursor: cursorParser, gemini: geminiParser, antigravity: antigravityParser };
 
 // ---------- 執行 ----------
-function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt, env, onEvent, images, addDirs, allowedTools, permissionPromptTool }) {
+function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt, env, onEvent, images, addDirs, allowedTools, permissionPromptTool, settingsFile }) {
   let child;
   const state = { texts: 0, streamed: false, hidden: new Set() };
   let collected = '';
@@ -344,7 +350,7 @@ function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt,
     ? Promise.race([explainModel(agent, cfg, r), stopped.then(() => r)]) : r));
   function start(resolve) {
     let cmd;
-    try { cmd = buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images, addDirs, allowedTools, permissionPromptTool }); }
+    try { cmd = buildCommand(agent, cfg, { prompt, sessionId, mcpConfig, systemPrompt, cwd, images, addDirs, allowedTools, permissionPromptTool, settingsFile }); }
     catch (err) { return resolve({ error: err.message, text: '' }); }
     const childEnv = { ...process.env, ...env };
     delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -377,7 +383,7 @@ function runAgent(agent, cfg, { prompt, cwd, sessionId, mcpConfig, systemPrompt,
         error = tr('{name} 結束碼 {code}', { name: labelOf(agent, cfg), code }) + (tail ? '\n' + tail : '');
       }
       resolve({ text: collected.trim() || state.final || '', final: state.final || '', sessionId: state.session || sessionId,
-        error, usage: state.usage, cost: state.cost, denials: state.denials, kind, lastUsage: state.lastUsage, steps: state.steps || 0 });
+        error, usage: state.usage, cost: state.cost, denials: state.denials, kind, lastUsage: state.lastUsage, steps: state.steps || 0, limitHit: state.limitHit });
     });
     child.stdin.on('error', () => {});
     child.stdin.end(cmd.stdin ?? '', 'utf8');

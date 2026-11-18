@@ -147,6 +147,18 @@
           <div class="muted env-hint">一次檢查 Node.js、各個 CLI 有沒有裝與登入、工作資料夾能不能寫入。第一次使用或出問題時按一下。</div>
           <div id="envResult"></div>
         </section>
+        <section class="set-group" id="apiGroup">
+          <h3>Claude API（備用）<span id="apiKeyState" class="muted"></span></h3>
+          <div class="muted env-hint">訂閱的額度用完時，Claude 改用 API 金鑰繼續，扣的是 API 額度。金鑰用 Windows 的加密存在這台電腦，畫面上不會再顯示；Claude 要用時才向 AgentDesk 要，不放進環境變數。</div>
+          <label class="row"><span>API 金鑰</span>
+            <div class="inline"><input id="setApiKey" type="password" autocomplete="off" placeholder="sk-ant-…"><button id="saveApiKey" class="btn">儲存金鑰</button><button id="clearApiKey" class="btn subtle">清除</button></div></label>
+          <label class="row check"><input type="checkbox" id="setApiAuto"><span>訂閱額度用完時，自動改用 Claude API 繼續</span></label>
+          <label class="row"><span>什麼時候切換</span>
+            <select id="setApiWhen"><option value="weekly">每週額度用完</option><option value="any">每週或 5 小時額度用完</option></select></label>
+          <label class="row"><span>API 剩餘額度（美元）</span>
+            <div><div class="inline"><input id="setApiBase" type="number" min="0" step="0.01" placeholder="例如 100"><button id="saveApiBase" class="btn">更新</button></div>
+            <div class="hint">到 Claude Console 的 Billing 頁看目前餘額填進來。之後 AgentDesk 用 Claude CLI 回報的費用往下扣，是估計值，以 Console 為準。</div></div></label>
+        </section>
         <div id="agentSettings"></div>
       </div>
       <div class="modal-foot"><span id="setMsg" class="muted"></span><button class="btn" data-close>取消</button><button id="saveSettings" class="btn primary">儲存</button></div>

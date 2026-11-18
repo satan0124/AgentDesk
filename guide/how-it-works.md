@@ -97,6 +97,21 @@ The right panel shows the current chat only: whether each agent is idle or worki
 - Below 1,100 px of window width the right panel hides itself and comes back when the window is wider; ▤ in the top bar shows it anyway.
 - **Usage**: each reply shows that turn's tokens (input including cache, plus output) next to the agent name, with the cost when the CLI reports one (Claude, at API prices). The panel shows the total for this chat. Codex and Antigravity report running totals per session, so AgentDesk subtracts the previous turn; the first turn after an AgentDesk update in an existing session shows nothing.
 
+## Claude API fallback
+
+Add an API key under **Claude API (fallback)** in Settings, and when your subscription's weekly limit runs out, Claude continues on the API. Settings can also switch on the 5-hour limit, or turn automatic switching off.
+
+- **How**: while you are logged in with a subscription, the Claude CLI keeps using that login even when given a key (tested 2026-11-18 with Claude Code 2.1.310 and a fake key). So in API mode Claude runs with a separate config folder, `%APPDATA%\AgentDesk\claude-api\` (`CLAUDE_CONFIG_DIR`), which holds no login and can only use the key. The subfolders of `~/.claude` (sessions, skills, plugins) are junctions back to the originals and `CLAUDE.md` and `settings.json` are copied, so sessions carry over when you switch. Connectors and built-in skills that come with a claude.ai account are not available in API mode.
+- **When**:
+  - If a turn fails because the limit ran out, the same message runs again on the API. Blocked at the start, the whole prompt is resent; blocked partway, Claude is asked to finish the work.
+  - If the right panel already shows the weekly limit as used up, the next turn starts on the API.
+  - Detection uses the Claude CLI's `rate_limit_event` (status rejected), or the error message when that event is missing. Both follow the CLI's event format; neither has been tested by actually running out of a subscription limit.
+- **Notice**: the reply gets a one-line note, and the Claude card in the right panel shows **Using the Claude API**, why it switched, the estimated API balance and when the subscription limit resets.
+- **Switching back**: never automatic. Click **Back to subscription** on the card; it turns green once the reset time has passed. With a key set, the card also offers **Use API** to switch by hand.
+- **Balance**: Anthropic offers no public API for the remaining credit, so enter the balance from the Billing page of the Claude Console in Settings. AgentDesk then subtracts the cost the Claude CLI reports, so the number is an estimate.
+- **Key**: encrypted with Electron's safeStorage (DPAPI on Windows) and stored in `settings.json`. The window only ever gets the last 4 characters, and if encryption is unavailable the key is not saved. Claude gets the key through `apiKeyHelper`: a small node script that asks AgentDesk's local service, which only answers while an API-mode Claude run is active. The key is not in the environment, so commands Claude runs do not see it in `env` or `set`. This stops accidental leaks, not a program that sets out to find the key: anything running under the same Windows account can decrypt DPAPI or ask the way the script does. Only if node cannot be found does AgentDesk fall back to the `ANTHROPIC_API_KEY` environment variable.
+- Compression runs Claude on whichever billing is active, but never switches by itself. Delegated agents are not affected.
+
 ## Custom agents
 
 **Add another CLI agent** at the bottom of Settings has templates for Antigravity CLI (`agy`), Claude-compatible stream-json and any plain-text CLI. You can set the command, arguments, how the prompt is passed, output format, model, resume flag and a description for Claude.

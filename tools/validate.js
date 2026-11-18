@@ -756,7 +756,7 @@ async function unitTests() {
     const fin = turn.slice(turn.lastIndexOf('} finally {'));
     // startTurn：running.set 之後整段包在 try 裡，finally 結束工作、清掉執行中，對話還在才存檔與寫逐字稿；回合跑完發現對話已被刪就不再發事件
     assert(turn.indexOf('running.set(convId, ctx)') < turn.indexOf('try {') && /if \(job\) endJob\(job, endError\)/.test(fin) && fin.includes('running.delete(convId)')
-      && /if \(convs\.get\(convId\) === conv\) \{ saveConv\(conv\); writeTranscript\(conv\); \}/.test(fin) && /await run\.promise;\s*\n\s*if \(convs\.get\(convId\) !== conv\)/.test(turn)
+      && /if \(convs\.get\(convId\) === conv\) \{ saveConv\(conv\); writeTranscript\(conv\); \}/.test(fin) && /let r = await attempt\(\);[\s\S]*?if \(convs\.get\(convId\) !== conv\) \{ endError = r\.error/.test(turn)
       && /catch \(e\) \{[\s\S]*?status: 'error'/.test(turn), 'startTurn 的收尾不完整');
     // compress：迴圈到寫索引整段包在 try 裡，丟例外時記成錯誤，照樣 endJob、清掉執行中
     assert(comp.indexOf('running.set(convId, ctx)') < comp.indexOf('try {\n  for') && /\} catch \(e\) \{ error = e\?\.message \|\| String\(e\); \}\s*\n\s*const entries = checked\.entries;\s*\n\s*endJob\(job, error\);\s*\n\s*running\.delete\(convId\);/.test(comp),
@@ -938,6 +938,43 @@ async function integrationTests() {
     const main = readSrc('main.js');
     assert(/if \(role === 'main'\) \{\s*\n\s*if \(agent === 'claude'\) notes\.system = \[notes\.system, choiceNote\(tr\)\]/.test(main), '選項要求只該給主對話的 Agent');
   });
+  await check('Claude API 備用：看出額度用完（事件或錯誤文字）、每週／5 小時、要不要切、剩餘額度；金鑰不給畫面', () => {
+    const b = require(path.join(SRC, 'billing.js'));
+    const full = { windows: [{ kind: 'seven_day', used: 100, resetsAt: Date.now() / 1000 + 3600 }] };
+    const hits = [
+      b.limitHit({ error: 'x', limitHit: 'seven_day' }), b.limitHit({ error: 'x', limitHit: 'five_hour' }),
+      b.limitHit({ error: "You've hit your weekly limit · resets Mon 9am" }), b.limitHit({ error: '5-hour limit reached ∙ resets 3pm' }),
+      b.limitHit({ error: 'Claude AI usage limit reached|1736000000' }, full), b.limitHit({ error: 'Claude AI usage limit reached|1736000000' }),
+      b.limitHit({ error: 'API Error: 401 invalid x-api-key' }), b.limitHit({ error: '已停止', limitHit: 'seven_day' }), b.limitHit({ text: 'ok' }),
+    ];
+    assert(JSON.stringify(hits) === '["seven_day","five_hour","seven_day","five_hour","seven_day","five_hour",null,null,null]', JSON.stringify(hits));
+    assert(b.shouldSwitch('seven_day', 'weekly') && !b.shouldSwitch('five_hour', 'weekly') && b.shouldSwitch('five_hour', 'any') && !b.shouldSwitch(null, 'any'), 'shouldSwitch');
+    assert(b.weeklyFull(full) && !b.weeklyFull({ windows: [{ kind: 'seven_day', used: 100, resetsAt: Date.now() / 1000 - 10 }] }) && !b.weeklyFull({ windows: [{ kind: 'seven_day', used: 80 }] }), 'weeklyFull');
+    assert(b.remaining({ base: 10, spent: 0.25 }) === 9.75 && b.remaining({ spent: 3 }) === null && b.resetAt(full) > Date.now(), 'remaining');
+    const main = readSrc('main.js');
+    // 金鑰：safeStorage 加密才存、給畫面的設定拿掉 keyEnc、存整份設定沿用原本的金鑰；API 模式不蓋掉訂閱額度
+    assert(main.includes('safeStorage.encryptString(key)') && main.includes('const { keyEnc, ...api }') && main.includes('keyEnc: keep.keyEnc')
+      && main.includes('if (usesApi(agent)) return;') && main.includes("req.headers['x-agentdesk-token'] === keyToken && apiRuns > 0"), '金鑰處理');
+    // API 模式的設定資料夾：子資料夾用 junction 指回原處（session 共用）、檔案複製、登入憑證不帶
+    const { prepareHome, helperCommand } = require(path.join(SRC, 'apihome.js'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ad-home-')), src = path.join(tmp, 'src'), dst = path.join(tmp, 'dst');
+    fs.mkdirSync(path.join(src, 'projects', 'p1'), { recursive: true });
+    fs.writeFileSync(path.join(src, 'projects', 'p1', 's.jsonl'), 'x');
+    fs.writeFileSync(path.join(src, 'CLAUDE.md'), 'rules'); fs.writeFileSync(path.join(src, '.credentials.json'), '{"secret":1}');
+    fs.writeFileSync(path.join(tmp, '.claude.json'), '{"mcp":1}');
+    prepareHome(dst, { src, home: tmp });
+    const linked = fs.lstatSync(path.join(dst, 'projects')).isSymbolicLink() && fs.existsSync(path.join(dst, 'projects', 'p1', 's.jsonl'));
+    const ok = linked && fs.readFileSync(path.join(dst, 'CLAUDE.md'), 'utf8') === 'rules' && !fs.existsSync(path.join(dst, '.credentials.json'))
+      && fs.existsSync(path.join(dst, '.claude.json'));
+    fs.rmSync(dst, { recursive: true, force: true });
+    const srcKept = fs.existsSync(path.join(src, 'projects', 'p1', 's.jsonl'));   // 清掉 API 資料夾不能連原本的 session 一起刪
+    fs.rmSync(tmp, { recursive: true, force: true });
+    assert(ok && srcKept && helperCommand({ node: 'C:\\Program Files\\nodejs\\node.exe', script: 'D:\\a b\\h.js', port: 1, token: 't' }) === '"C:/Program Files/nodejs/node.exe" "D:/a b/h.js" 1 t',
+      JSON.stringify({ linked, ok, srcKept }));
+    // 出錯時的 result 不當成回覆文字（改用 API 重跑時畫面才不會留著那句錯誤）
+    const ag = fs.readFileSync(path.join(SRC, 'agents.js'), 'utf8');
+    assert(ag.includes("if (!state.streamed && evt.result && !evt.is_error)") && ag.includes("state.limitHit = evt.rate_limit_info.rateLimitType"), 'agents.js');
+  });
 
   await check('逐字稿記下使用者允許或拒絕了什麼', async () => {
     const { entry } = require(path.join(SRC, 'transcript.js'));
@@ -1005,7 +1042,8 @@ async function e2eTests() {
     const s = JSON.parse(fs.readFileSync(path.join(data, 'settings.json'), 'utf8'));
     s.language = language;
     fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify(s, null, 2));
-    const env = { ...process.env, AGENTDESK_DATA: data, AGENTDESK_SELFTEST: dir, AGENTDESK_SELFTEST_STEPS: JSON.stringify(steps),
+    // AGENTDESK_TEST_BILLING：Claude API 備用改由假 Claude（xcc）代表 Claude，才測得到額度用完自動切換的整個流程
+    const env = { ...process.env, AGENTDESK_DATA: data, AGENTDESK_SELFTEST: dir, AGENTDESK_SELFTEST_STEPS: JSON.stringify(steps), AGENTDESK_TEST_BILLING: 'xcc',
       AGENTDESK_SELFTEST_SHOTS: JSON.stringify([[`e2e-${language}`, '']]),
       // 檢查腳本自己丟錯時，把錯誤訊息帶回來（不然只會看到「Script failed to execute」）
       AGENTDESK_SELFTEST_JS: (foreign ? `window.__FOREIGN = ${JSON.stringify(foreign)};\n` : '') + (del ? `window.__DELETE = ${JSON.stringify(del)};\n` : '')
@@ -1178,6 +1216,15 @@ async function e2eTests() {
     assert(u.blankTop && u.blankHidden && u.blankReuse && u.blankShown && u.firstSkipsBlank && u.more && u.modeMenu && u.modeClosed && u.infoOneLine && lay && u.forced && u.folded && u.unfold
       && u.moreCjk === false && u.modeCjk === false && u.panelTip === false && u.foldCjk === false, JSON.stringify(u));
     return `主欄 ${(u.layout || []).map(l => l.main).join('／')}px`; });
+  await check('畫面：Claude API 備用：額度用完自動改用 API 重跑同一則（做到一半就接著做）、訊息與卡片提示、剩餘額度、切回訂閱後先照用訂閱、一開始就切、關掉不切、金鑰不外露', () => { const b = r.billing || {};
+    // 驗證時 API 模式的設定資料夾不能指回使用者真的 ~/.claude，也不能複製它的 .claude.json、CLAUDE.md
+    const home = path.join(data, 'claude-api');
+    const leaked = fs.existsSync(home) ? fs.readdirSync(home).filter(n => fs.lstatSync(path.join(home, n)).isSymbolicLink() || /^(\.claude\.json|CLAUDE\.md|settings\.json)$/.test(n)) : ['（沒有建立）'];
+    assert(!leaked.length, `API 設定資料夾碰到了真的 ~/.claude：${leaked.join(', ')}`);
+    assert(b.badKey && b.keySaved && b.retried && b.helper && b.mode && b.card && b.info && b.remaining && b.back && b.backByHand && b.preSwitch && b.midway && b.keyKept && b.noAuto && b.settingsUi && b.cleared
+      && b.cjk === false && b.settingsCjk === false, JSON.stringify(b)); });
+  if (rc) await check('畫面：Claude API 備用：簡中介面的提示與設定沒有繁體字', () => { const b = rc.billing || {};
+    assert(b.retried && b.cjk === false && b.settingsCjk === false, JSON.stringify(b)); });
   if (rc) await check('畫面：UX：簡中介面的模式選單、「⋯」選單、設定頁標題沒有繁體字', () => { const u = rc.ux || {};
     assert(u.moreCjk === false && u.modeCjk === false && u.panelTip === false && u.foldCjk === false, JSON.stringify(u)); });
   await check('畫面：每則回覆標題旁顯示這一輪的 tokens（有費用才顯示費用），右欄顯示這個對話的加總', () => { const u = r.usage || {};

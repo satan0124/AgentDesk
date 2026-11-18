@@ -733,6 +733,66 @@
   ux.foldCjk = CJK.test(secs[0].querySelector('.fold-head').title);
   $('#settingsModal').classList.add('hidden');
   out.ux = ux;
+  // 7k) Claude API 備用（驗證時由 xcc 代表 Claude）：設金鑰（畫面只拿得到末 4 碼）→ 每週額度用完的那一輪自動改用 API、同一則訊息重跑，
+  //     訊息裡有提示、卡片顯示正在用 API；填剩餘額度後扣掉回報的費用；切回訂閱；右欄記著每週額度用完時，下一輪一開始就改用 API；
+  //     關掉自動切換就照常失敗；存整份設定不會弄掉金鑰；清掉金鑰
+  const bk = {};
+  bk.badKey = !!(await api.setClaudeKey('not-a-key'))?.error;
+  const ks = await api.setClaudeKey('sk-ant-test-' + '0'.repeat(30) + 'wxyz');
+  settings = await api.getSettings();
+  bk.keySaved = ks?.claudeApi?.hasKey === true && ks.claudeApi.last4 === 'wxyz' && !JSON.stringify(ks).includes('0'.repeat(30)) && !('keyEnc' in ks.claudeApi)
+    && settings.claudeApi.hasKey === true && !JSON.stringify(settings).includes('0'.repeat(30));
+  const biConv = await api.createConv(current.cwd);
+  await openConv(biConv.id);
+  await api.send(biConv.id, 'xcc', 'weekly limit please');
+  const bc1 = await waitTurn(biConv.id, 2), bl1 = bc1.messages.at(-1);
+  const notice1 = bl1.parts.find(p => p.kind === 'notice')?.text || '';
+  bk.retried = bl1.status === 'done' && /apikey=yes/.test(msgTextOf(bl1)) && !/hit your weekly limit/.test(msgTextOf(bl1)) && !!notice1;
+  // 金鑰經 apiKeyHelper 拿到、不在環境變數裡，而且指到沒有登入憑證的設定資料夾（找不到 node 的電腦才會退回環境變數）
+  bk.helper = /helper=yes envkey=no home=yes/.test(msgTextOf(bl1));
+  agentStatus = await api.agentStatus();
+  bk.mode = agentStatus.billing?.mode === 'api' && agentStatus.billing.reason === 'auto' && agentStatus.billing.hit === 'seven_day' && !!agentStatus.billing.resetsAt;
+  await openConv(biConv.id); flush();
+  agent = 'xcc'; updateComposer(); renderAgentPanel();
+  const bcard = () => document.querySelector('#agentCards .acard[data-agent="xcc"] .bill');
+  bk.card = !!bcard()?.classList.contains('api') && !!bcard().querySelector('[data-bill="sub"]');
+  bk.info = $('#agentInfo').textContent.includes('API');
+  await api.setBilling({ base: 10 });
+  await api.send(biConv.id, 'xcc', 'second turn'); await waitTurn(biConv.id, 4);
+  agentStatus = await api.agentStatus(); renderAgentPanel();
+  bk.remaining = agentStatus.billing.remaining === 9.75 && /9\.75/.test(bcard()?.textContent || '');
+  bk.cjk = CJK.test(notice1 + (bcard()?.innerText || ''));
+  bcard().querySelector('[data-bill="sub"]').click();
+  for (let i = 0; i < 20 && agentStatus.billing.mode !== 'sub'; i++) await wait(100);
+  bk.back = agentStatus.billing.mode === 'sub' && !!document.querySelector('#agentCards .acard[data-agent="xcc"] .bill.sub [data-bill="api"]');
+  // 手動切回之後、還沒有新的額度資料：照使用者的意思先用訂閱跑（記的每週額度用完可能是舊的）
+  await api.send(biConv.id, 'xcc', 'third turn'); const bc3 = await waitTurn(biConv.id, 6);
+  bk.backByHand = bc3.messages.at(-1).status === 'done' && !/apikey=yes/.test(msgTextOf(bc3.messages.at(-1))) && (await api.agentStatus()).billing.mode === 'sub';
+  // 關掉自動切換：額度用完照常失敗（這一輪的 rate_limit_event 也讓右欄記下每週額度用完）
+  const s2 = await api.getSettings(); s2.claudeApi.auto = false; settings = await api.setSettings(s2);
+  bk.keyKept = settings.claudeApi.hasKey === true;
+  await api.send(biConv.id, 'xcc', 'weekly limit again'); const bc4 = await waitTurn(biConv.id, 8);
+  bk.noAuto = bc4.messages.at(-1).status === 'error' && (await api.agentStatus()).billing.mode === 'sub';
+  s2.claudeApi.auto = true; settings = await api.setSettings(s2);
+  // 右欄記著每週額度用完（剛才那一輪的事件，比手動切回晚）：下一輪一開始就改用 API，不先撞一次
+  await api.send(biConv.id, 'xcc', 'fourth turn'); const bc5 = await waitTurn(biConv.id, 10);
+  bk.preSwitch = /apikey=yes/.test(msgTextOf(bc5.messages.at(-1))) && bc5.messages.at(-1).parts.some(p => p.kind === 'notice');
+  // 做到一半才撞到額度：前面做的動作留著，改用 API 接著原本的 session 做（送的是「接著做」，不是整段重送）
+  await api.setBilling({ mode: 'sub' });
+  await api.send(biConv.id, 'xcc', 'midway limit'); const bc6 = await waitTurn(biConv.id, 12), bl6 = bc6.messages.at(-1);
+  bk.midway = bl6.status === 'done' && /apikey=yes/.test(msgTextOf(bl6)) && !/midway limit/.test(msgTextOf(bl6)) && bl6.parts.some(p => p.kind === 'tool' && p.name === 'Read');
+  // 設定頁：金鑰狀態顯示末 4 碼、不顯示金鑰
+  openSettings();
+  bk.settingsUi = $('#apiKeyState').textContent.includes('wxyz') && !$('#setApiKey').value && $('#setApiAuto').checked && $('#setApiWhen').value === 'weekly';
+  bk.settingsCjk = CJK.test($('#apiGroup').innerText.replace(/sk-ant-|wxyz/g, ''));
+  $('#settingsModal').classList.add('hidden');
+  settings = await api.setClaudeKey('');
+  bk.cleared = !settings.claudeApi.hasKey && (await api.agentStatus()).billing.mode === 'sub';
+  await api.setBilling({ base: null });
+  agent = 'claude';
+  await openConv(mid); await api.deleteConv(biConv.id);
+  agentStatus = await api.agentStatus(); renderAgentPanel(); updateComposer();
+  out.billing = bk;
   // 8) 逐字稿：validate.js 依對話 id 讀主程序寫的檔，段數要等於訊息數；
   //    第二次啟動時帶入 window.__DELETE（第一次的對話），刪掉後它的逐字稿要跟著不見
   out.transcript = { id: mid, count: (await api.getConv(mid)).messages.length };

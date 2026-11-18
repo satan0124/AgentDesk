@@ -26,15 +26,40 @@ process.stdin.on('data', c => { d += c; }).on('end', () => {
       ev({ type: 'result', result: text, session_id: id, total_cost_usd: 0, usage: { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 4000, output_tokens: 1 } });
     }, 500);
   }
+  // 額度用完（沒帶 ANTHROPIC_API_KEY 時）：「weekly limit」照真的 CLI 先發 rate_limit_event（rejected）再回錯誤；
+  // 「limit text」只有錯誤訊息（測只靠文字判斷的那條路）。帶了金鑰就照常回覆，多寫 apikey=yes，費用報 0.25
+  // 像真的 Claude 一樣：--settings 裡有 apiKeyHelper 就執行它拿金鑰（AgentDesk 的 API 模式走這條，見 src/apihome.js）
+  const helperKey = () => {
+    const si = process.argv.indexOf('--settings');
+    if (si < 0) return '';
+    try {
+      const cmd = JSON.parse(require('fs').readFileSync(process.argv[si + 1], 'utf8')).apiKeyHelper || '';
+      const parts = (cmd.match(/"[^"]*"|\S+/g) || []).map(s => s.replace(/^"|"$/g, ''));
+      return require('child_process').execFileSync(parts[0], parts.slice(1), { encoding: 'utf8' }).trim();
+    } catch { return ''; }
+  };
+  const viaHelper = /^sk-ant-/.test(helperKey());
+  const key = viaHelper || !!process.env.ANTHROPIC_API_KEY;
+  // 「midway limit」：先做了一個動作才被擋（測做到一半撞到額度、改用 API 接著做）
+  if (!key && /weekly limit|limit text|midway limit/.test(last)) {
+    if (/midway limit/.test(last)) {
+      ev({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu-m', name: 'Read', input: { file_path: 'a.txt' } }] } });
+      ev({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-m', content: 'ok' }] } });
+    }
+    if (/weekly limit|midway limit/.test(last)) ev({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'seven_day', utilization: 1, resetsAt: Math.floor(Date.now() / 1000) + 3600 } });
+    ev({ type: 'result', is_error: true, subtype: 'success', result: "You've hit your weekly limit · resets Mon 9am", session_id: id, total_cost_usd: 0 });
+    process.exitCode = 1;
+    return;
+  }
   // 使用者的話有「note X」時才照要求在最後一行寫索引（主題 topic-X），並回報收到的上一輪主題
   const nm = ask && last.match(/note (\w+)/);
-  const text = `cc got: ${last.slice(0, 40)} session=${id}` + (nm ? ` prev=${prev}\n\n[[agentdesk:index]] topic-${nm[1]}｜result ${nm[1]}｜src/edited.js` : '');
+  const text = `cc got: ${last.slice(0, 40)} session=${id}` + (key ? ` apikey=yes helper=${viaHelper ? 'yes' : 'no'} envkey=${process.env.ANTHROPIC_API_KEY ? 'yes' : 'no'} home=${process.env.CLAUDE_CONFIG_DIR ? 'yes' : 'no'}` : '') + (nm ? ` prev=${prev}\n\n[[agentdesk:index]] topic-${nm[1]}｜result ${nm[1]}｜src/edited.js` : '');
   const read = /big/.test(last) ? 150000 : 40000;
   ev({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Edit', input: { file_path: path.join(process.cwd(), 'src', 'edited.js') } }],
     usage: { input_tokens: 2, cache_creation_input_tokens: 5000, cache_read_input_tokens: 30000, output_tokens: 1 } } });
   ev({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }] } });
   ev({ type: 'assistant', message: { content: [{ type: 'text', text }], usage: { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: read, output_tokens: 1 } } });
   ev({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 5 } } });
-  ev({ type: 'result', result: text, session_id: id, total_cost_usd: 0,
+  ev({ type: 'result', result: text, session_id: id, total_cost_usd: key ? 0.25 : 0,
     usage: { input_tokens: 4, cache_creation_input_tokens: 5100, cache_read_input_tokens: 30000 + read, output_tokens: 6 } });
 });

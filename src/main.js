@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -17,6 +17,8 @@ const i18n = require('./shared/i18n');
 const tr = i18n.t;
 const { applyEvent, partsText } = require('./shared/reduce');
 const { upgradeCustom } = require('./shared/presets');
+const billingRules = require('./billing');
+const { prepareHome, HELPER, helperCommand } = require('./apihome');
 
 if (process.env.AGENTDESK_DATA) app.setPath('userData', process.env.AGENTDESK_DATA);
 const DATA = app.getPath('userData');
@@ -31,6 +33,11 @@ fs.mkdirSync(path.join(DATA, 'transcripts'), { recursive: true });
 const TR_DIR = fs.realpathSync.native(path.join(DATA, 'transcripts'));
 const SETTINGS_FILE = path.join(DATA, 'settings.json');
 const LIMITS_FILE = path.join(DATA, 'limits.json');
+const BILLING_FILE = path.join(DATA, 'billing.json');
+// API 模式的 Claude：另一個沒有登入憑證的設定資料夾、取金鑰的小程式與放 apiKeyHelper 的設定檔（見 apihome.js）
+const API_HOME = path.join(DATA, 'claude-api');
+const KEY_HELPER = path.join(DATA, 'api-key-helper.js');
+const KEY_SETTINGS = path.join(DATA, 'claude-api-settings.json');
 const BRIDGE = path.join(DATA, 'mcp-bridge.js');
 fs.mkdirSync(CONV_DIR, { recursive: true });
 fs.mkdirSync(MCP_DIR, { recursive: true });
@@ -47,6 +54,9 @@ const DEFAULT_SETTINGS = {
     codex: { enabled: false, cli: 'codex', model: '', effort: '', sandbox: 'workspace-write' },
     cursor: { enabled: false, cli: 'agent', model: '', effort: '', permission: 'force' },
   },
+  // Claude API 備用（見 billing.js）：金鑰用 safeStorage 加密存在 keyEnc，畫面只拿得到 hasKey 與末 4 碼。
+  // auto：額度用完自動改用 API；when：weekly＝只看每週額度，any＝5 小時額度用完也切
+  claudeApi: { auto: true, when: 'weekly' },
 };
 
 let win;
@@ -73,7 +83,11 @@ function systemLangs() {
   try { return [app.getLocale()]; } catch { return []; }
 }
 function applyLang() { i18n.setLang(i18n.pickLang(settings.language, systemLangs())); }
-const publicSettings = () => ({ ...settings, uiLang: i18n.getLang() });
+// 給畫面的設定：拿掉加密過的 API 金鑰，只說有沒有設定、末 4 碼
+function publicSettings() {
+  const { keyEnc, ...api } = { ...DEFAULT_SETTINGS.claudeApi, ...(settings.claudeApi || {}) };
+  return { ...settings, claudeApi: { ...api, hasKey: !!keyEnc }, uiLang: i18n.getLang() };
+}
 
 // ---------- 對話儲存 ----------
 const convFile = id => path.join(CONV_DIR, `${id}.json`);
@@ -384,7 +398,11 @@ ipcMain.handle('approval:answer', (_, id, allow) => { approvals.get(id)?.finish(
 const jobs = new Map();          // jobId -> job
 const finished = [];             // 最近完成，新的在前
 let jobsTimer = null;
-const agentStatus = () => ({ running: [...jobs.values()], finished, limits });
+const agentStatus = () => ({ running: [...jobs.values()], finished, limits, billing: billingView() });
+// 給畫面的計費狀態（不含金鑰）
+function billingView() {
+  return { ...billing, agent: BILLING_AGENT, hasKey: !!settings.claudeApi?.keyEnc, remaining: billingRules.remaining(billing) };
+}
 function publishJobs() {
   if (jobsTimer) return;
   jobsTimer = setTimeout(() => { jobsTimer = null; send('agents:status', agentStatus()); }, 200);
@@ -395,10 +413,72 @@ let limits = {};
 try { limits = JSON.parse(fs.readFileSync(LIMITS_FILE, 'utf8')) || {}; } catch {}
 function setLimits(agent, { windows, plan }) {
   if (!windows?.length) return;
+  // API 模式回報的不是訂閱的額度，不要蓋掉右欄記的訂閱額度
+  if (usesApi(agent)) return;
   limits[agent] = { windows, plan, at: Date.now() };
   try { fs.writeFileSync(LIMITS_FILE, JSON.stringify(limits)); } catch {}
   publishJobs();
 }
+// ---------- Claude 的計費：訂閱或 Claude API（規則見 billing.js） ----------
+// billing.json：{ mode: 'sub'|'api', reason: 'auto'|'manual'|'nokey', since, hit（自動切換時用完的是哪個額度）, resetsAt（每週額度預計恢復，毫秒）,
+//                 base（使用者填的 API 剩餘額度，美元）, baseAt, spent（填了之後 API 模式 Claude 回報的費用加總） }
+// 驗證時（AGENTDESK_TEST_BILLING）改由假 Claude（xcc）代表 Claude，才測得到整個流程
+const BILLING_AGENT = (process.env.AGENTDESK_SELFTEST && process.env.AGENTDESK_TEST_BILLING) || 'claude';
+let billing = { mode: 'sub' };
+try { billing = { mode: 'sub', ...JSON.parse(fs.readFileSync(BILLING_FILE, 'utf8')) }; } catch {}
+function apiKey() {
+  const enc = settings.claudeApi?.keyEnc;
+  if (!enc) return null;
+  try { return safeStorage.decryptString(Buffer.from(enc, 'base64')); } catch { return null; }
+}
+function saveBilling() { try { fs.writeFileSync(BILLING_FILE, JSON.stringify(billing)); } catch {} publishJobs(); }
+// mode：切換；base：校正 API 剩餘額度（之後的花費從 0 算起）
+function setBilling({ mode, base, reason, hit }) {
+  if (mode === 'api' && !apiKey()) return { error: tr('還沒設定 Claude API 金鑰，請到設定填寫') };
+  if (mode === 'api' || mode === 'sub') {
+    if (mode !== billing.mode) billing = { ...billing, mode, reason, since: Date.now(), hit: mode === 'api' ? hit || null : null,
+      resetsAt: mode === 'api' ? billingRules.resetAt(limits[BILLING_AGENT], hit || 'seven_day') : null };
+  }
+  if (typeof base === 'number' && isFinite(base) && base >= 0) billing = { ...billing, base, baseAt: Date.now(), spent: 0 };
+  else if (base === null) { delete billing.base; delete billing.baseAt; billing.spent = 0; }
+  saveBilling();
+  return billing;
+}
+const usesApi = agent => agent === BILLING_AGENT && billing.mode === 'api' && !!apiKey();
+// 這個 Agent 這一輪怎麼跑：API 模式的 Claude 指到 API_HOME（沒有登入憑證，只能用金鑰），金鑰由 apiKeyHelper 向本機服務要，
+// 不放進環境變數（Claude 跑的指令看不到）。找不到 node 才退回環境變數 ANTHROPIC_API_KEY。
+// 回傳 { env, settingsFile }；不是 API 模式回 {}
+let nodeExe;
+function billingRun(agent) {
+  if (!usesApi(agent)) return {};
+  // 驗證時不碰使用者真的 ~/.claude（不建指回去的 junction、不複製 .claude.json 到暫存資料夾）
+  const test = process.env.AGENTDESK_SELFTEST ? path.join(DATA, 'claude-home-test') : null;
+  const env = { CLAUDE_CONFIG_DIR: prepareHome(API_HOME, test ? { src: test, home: test } : undefined) };
+  if (nodeExe === undefined) { const n = resolveCli('node'); nodeExe = n && /node\.exe$/i.test(n[0]) ? n[0] : null; }
+  if (!nodeExe) return { env: { ...env, ANTHROPIC_API_KEY: apiKey() } };
+  fs.writeFileSync(KEY_SETTINGS, JSON.stringify({ apiKeyHelper: helperCommand({ node: nodeExe, script: KEY_HELPER, port, token: keyToken }) }));
+  return { env, settingsFile: KEY_SETTINGS };
+}
+// 本機服務的 /apikey 只在有 API 模式的 Claude 在跑時給金鑰；token 每次啟動不同、和 MCP bridge 用的分開
+const keyToken = crypto.randomBytes(16).toString('hex');
+let apiRuns = 0;
+// API 模式跑的這一輪花了多少（CLI 回報的 API 牌價）：記進已用
+function noteSpent(onApi, r) {
+  if (!onApi || !(r?.cost > 0)) return;
+  billing.spent = Math.round(((billing.spent || 0) + r.cost) * 10000) / 10000;
+  saveBilling();
+}
+// 額度用完時要不要改用 API：有金鑰、開著自動切換、用完的是設定要切的那個額度
+function autoSwitch(hit) {
+  const api = settings.claudeApi || {};
+  if (billing.mode === 'api' || api.auto === false || !apiKey() || !billingRules.shouldSwitch(hit, api.when)) return false;
+  setBilling({ mode: 'api', reason: 'auto', hit });
+  if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true);
+  return true;
+}
+const switchNote = hit => tr(hit === 'seven_day'
+  ? '{name} 的每週額度用完了，已改用 Claude API 繼續。右欄的卡片可以看 API 剩餘額度，每週額度恢復後可以切回訂閱。'
+  : '{name} 的 5 小時額度用完了，已改用 Claude API 繼續。右欄的卡片可以看 API 剩餘額度，額度恢復後可以切回訂閱。', { name: labelOf(BILLING_AGENT) });
 let codexLimitsAt = 0;
 async function refreshCodexLimits(force) {
   if (!settings.agents.codex?.enabled || (!force && Date.now() - codexLimitsAt < 60000)) return;
@@ -533,9 +613,41 @@ async function startTurn(convId, agent, text, attachments = []) {
     if (sys.length) opts.systemPrompt = sys.join('\n\n');
     opts.env = { MCP_TOOL_TIMEOUT: '7200000', MCP_TIMEOUT: '30000' };
   }
-  const run = runAgent(agent, cfg, opts);
-  ctx.stops.add(run.stop);
-  const r = await run.promise;
+  // 右欄記的每週額度已經用完：這一輪直接改用 API，不先撞一次額度上限
+  // 使用者剛手動切回訂閱、之後還沒收到新的額度資料：照他的意思先用訂閱跑（API 模式不更新訂閱額度，記的可能是舊的），真的被擋再切
+  const backByHand = billing.mode === 'sub' && billing.reason === 'manual' && (limits[agent]?.at || 0) <= (billing.since || 0);
+  if (agent === BILLING_AGENT && !usesApi(agent) && !backByHand && billingRules.weeklyFull(limits[agent]) && autoSwitch('seven_day')) {
+    emitTo(conv, msg, { type: 'notice', text: switchNote('seven_day') });
+  }
+  // 跑一次；API 模式的 Claude 加上金鑰，花費記進 API 已用
+  const attempt = async (extra = {}) => {
+    const onApi = usesApi(agent), bill = billingRun(agent);
+    if (onApi) apiRuns++;
+    try {
+      const run = runAgent(agent, cfg, { ...opts, ...extra, env: { ...(opts.env || {}), ...(bill.env || {}) }, settingsFile: bill.settingsFile });
+      ctx.stops.add(run.stop);
+      const res = await run.promise;
+      ctx.stops.delete(run.stop);
+      noteSpent(onApi, res);
+      return res;
+    } finally { if (onApi) apiRuns--; }
+  };
+  let r = await attempt();
+  // 訂閱額度用完而失敗：有 API 金鑰、開著自動切換，就改用 API 把同一則訊息再跑一次
+  if (agent === BILLING_AGENT && convs.get(convId) === conv && !usesApi(agent)) {
+    const hit = billingRules.limitHit(r, limits[agent]);
+    // 中途才撞到（已經做了些事）：接著原本的 session 做；一開始就被擋：回到這一輪之前的 session，整段重送
+    const midway = msg.parts.some(p => p.kind === 'tool' || p.kind === 'text') && !!conv.sessions[agent];
+    if (hit && autoSwitch(hit)) {
+      emitTo(conv, msg, { type: 'notice', text: switchNote(hit) });
+      // 接著做的這一輪一樣附上索引要求（ask），這一輪才記得到索引
+      if (midway) r = await attempt({ prompt: `${tr('（剛才額度用完中斷了，現在改用 Claude API。請接著把剛才的工作做完。）')}\n\n${ask}`, sessionId: conv.sessions[agent] });
+      else {
+        if (opts.sessionId) conv.sessions[agent] = opts.sessionId; else delete conv.sessions[agent];
+        r = await attempt();
+      }
+    }
+  }
   if (convs.get(convId) !== conv) { endError = r.error || '已停止'; return; }   // 執行中對話被刪掉：不再發事件、不記 session（finally 收尾）
   // session 失效（例如 CLI 端被刪）：清掉，下一次重開並帶上下文
   if (r.error && /session|thread|chat/i.test(r.error) && /not found|no conversation|找不到|invalid/i.test(r.error)) dropSession(conv, agent);
@@ -673,16 +785,20 @@ async function compress(convId, agent) {
     if (k) send('conv:changed', listConvs());
     const last = k === parts.length - 1;
     const prompt = compressPrompt({ file: transcriptFile(convId), from: a, to: b, tr, state: wantState && last, text: resume ? '' : segText(a, b) });
+    // API 模式的 Claude 寫索引也用金鑰、花費記進 API 已用（壓縮不自動切換：用完就照常失敗，什麼都不變）
+    const onApi = usesApi(agent), bill = billingRun(agent);
     const run = runAgent(agent, { ...cfgFor(conv, agent), readOnly: true }, { prompt,
-      cwd: conv.cwd, sessionId: resume ? conv.sessions[agent] : undefined, addDirs: [trDir(convId)],
+      cwd: conv.cwd, sessionId: resume ? conv.sessions[agent] : undefined, addDirs: [trDir(convId)], env: bill.env, settingsFile: bill.settingsFile,
       onEvent: ev => {
         if (ev.type === 'session') return;
         if (ev.type === 'limits') return setLimits(agent, ev);
         trackEvent(job, ev);
       } });
     ctx.stops.add(run.stop);
-    r = await run.promise;
+    if (onApi) apiRuns++;
+    try { r = await run.promise; } finally { if (onApi) apiRuns--; }
     ctx.stops.delete(run.stop);
+    noteSpent(onApi, r);
     // 這一輪是唯讀跑的。接續的 session 沒壓成時會留著：記下它跑過唯讀，之後在工作模式才會重開（Cursor，見 mode.js 的 mustRestart）。
     // 沒接續就沒動到原本的 session
     if (resume && stickyReadOnly(agent)) conv.told = { ...(conv.told || {}), [agent]: 'chat' };
@@ -721,6 +837,12 @@ async function compress(convId, agent) {
 function startServer() {
   return new Promise(resolve => {
     const server = http.createServer((req, res) => {
+      // apiKeyHelper（apihome.js 的小程式）來要 Claude API 金鑰：token 對、而且有 API 模式的 Claude 正在跑才給
+      if (req.method === 'GET' && req.url === '/apikey') {
+        const key = req.headers['x-agentdesk-token'] === keyToken && apiRuns > 0 ? apiKey() : null;
+        res.writeHead(key ? 200 : 403, { 'content-type': 'text/plain' });
+        return res.end(key || 'no key');
+      }
       if (req.method !== 'POST' || (req.url !== '/delegate' && req.url !== '/approve')) { res.writeHead(404); return res.end(); }
       let body = '';
       req.setEncoding('utf8');
@@ -845,7 +967,29 @@ ipcMain.handle('chat:send', (_, convId, agent, text, atts) => {
 });
 ipcMain.handle('chat:stop', (_, convId) => { const ctx = running.get(convId); if (ctx) for (const s of ctx.stops) s(); });
 ipcMain.handle('settings:get', () => publicSettings());
-ipcMain.handle('settings:set', (_, s) => { delete s.uiLang; settings = s; saveSettings(); clearCache(); applyLang(); return publicSettings(); });
+ipcMain.handle('settings:set', (_, s) => {
+  delete s.uiLang;
+  // API 金鑰只經 claudeApi:key 改：畫面送回來的設定不含金鑰，沿用原本存的
+  const keep = settings.claudeApi || {};
+  s.claudeApi = { auto: s.claudeApi?.auto !== false, when: s.claudeApi?.when === 'any' ? 'any' : 'weekly',
+    ...(keep.keyEnc ? { keyEnc: keep.keyEnc, last4: keep.last4 } : {}) };
+  settings = s; saveSettings(); clearCache(); applyLang(); return publicSettings();
+});
+// 設定或清掉 Claude API 金鑰（空字串＝清掉）。用 safeStorage（Windows 是 DPAPI，綁這個 Windows 帳號）加密後才存，不能加密就不存
+ipcMain.handle('claudeApi:key', (_, key) => {
+  key = String(key || '').trim();
+  const api = { ...DEFAULT_SETTINGS.claudeApi, ...(settings.claudeApi || {}) };
+  if (!key) { delete api.keyEnc; delete api.last4; if (billing.mode === 'api') setBilling({ mode: 'sub', reason: 'nokey' }); }
+  else {
+    if (!/^sk-ant-[\w-]{20,}$/.test(key)) return { error: tr('這看起來不是 Claude API 金鑰（應該是 sk-ant- 開頭）') };
+    if (!safeStorage.isEncryptionAvailable()) return { error: tr('這台電腦不能加密儲存金鑰，所以沒有存') };
+    api.keyEnc = safeStorage.encryptString(key).toString('base64');
+    api.last4 = key.slice(-4);
+  }
+  settings.claudeApi = api; saveSettings();
+  return publicSettings();
+});
+ipcMain.handle('billing:set', (_, patch) => setBilling({ ...patch, reason: 'manual' }));
 ipcMain.handle('models:list', (_, agent, cfg) => { if (agent !== 'claude') clearCache(); return listModels(agent, cfg || settings.agents[agent]); });
 ipcMain.handle('dialog:files', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] });
@@ -919,6 +1063,7 @@ app.setAppUserModelId('AgentDesk');
 app.whenReady().then(async () => {
   applyLang();
   fs.copyFileSync(path.join(__dirname, 'mcp-bridge.js'), BRIDGE);
+  fs.writeFileSync(KEY_HELPER, HELPER);
   // 上次異常關閉而停在「執行中」的訊息
   for (const f of fs.readdirSync(CONV_DIR)) {
     try {

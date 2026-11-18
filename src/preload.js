@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('api', {
   stop: convId => ipcRenderer.invoke('chat:stop', convId),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: s => ipcRenderer.invoke('settings:set', s),
+  setClaudeKey: key => ipcRenderer.invoke('claudeApi:key', key),
+  setBilling: patch => ipcRenderer.invoke('billing:set', patch),
   listModels: (agent, cfg) => ipcRenderer.invoke('models:list', agent, cfg),
   pickFolder: current => ipcRenderer.invoke('dialog:folder', current),
   openPath: p => ipcRenderer.invoke('open:path', p),

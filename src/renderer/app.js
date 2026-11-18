@@ -516,7 +516,8 @@ api.on('chat:error', ({ convId, error }) => { if (current?.id === convId) alertB
 function agentInfoText() {
   if (!settings) return '';
   const p = permLabel(agent), danger = isWorkConv() && DANGER_PERMS[agent]?.includes(effCfg(agent)[permKeyOf(agent)]);
-  return [modelLine(agent), p && (danger ? '⚠ ' : '🔒 ') + p].filter(Boolean).join(' · ');
+  const b = agentStatus.billing, onApi = b?.mode === 'api' && b.agent === agent;
+  return [onApi ? '💳 API' : null, modelLine(agent), p && (danger ? '⚠ ' : '🔒 ') + p].filter(Boolean).join(' · ');
 }
 function agentInfoTip() {
   if (!settings) return '';
@@ -1212,6 +1213,36 @@ function quotaHtml(a) {
     return `<div class="qrow" title="${esc(tip)}"><span class="ql">${esc(t(WIN_LABEL[w.kind] || w.kind))}</span><span class="qbar"><i class="${left < 20 ? 'low' : ''}" style="width:${left}%"></i></span><span class="qv">${t('剩 {n}%', { n: left })}</span></div>`;
   }).join('')}</div>`;
 }
+// Claude API 備用（主程序的 billing）：正在用 API 時，卡片上一塊提示：為什麼切、API 約剩多少、訂閱額度恢復了沒、切回訂閱。
+// 用訂閱、但設了金鑰時只有一行「API 備用已設定」與「改用 API」
+const money = v => '$' + (Math.round(v * 100) / 100).toFixed(2);
+function billingLeft(b) {
+  return typeof b.remaining === 'number' ? t('API 額度約剩 {money}', { money: money(b.remaining) })
+    : t('API 已用 {money}（在設定填剩餘額度，就能算出還剩多少）', { money: money(b.spent || 0) });
+}
+function billingHtml(a) {
+  const b = agentStatus.billing;
+  if (!b || a !== b.agent) return '';
+  if (b.mode === 'api') {
+    const back = !!b.resetsAt && b.resetsAt <= Date.now();
+    const why = b.reason === 'auto' ? t(b.hit === 'five_hour' ? '5 小時額度用完，自動改用 Claude API' : '每週額度用完，自動改用 Claude API') : t('手動改用 Claude API');
+    const reset = b.resetsAt ? (back ? t('訂閱額度應該已經恢復，可以切回訂閱') : t('訂閱額度 {when}恢復', { when: untilText(b.resetsAt / 1000) })) : '';
+    const low = typeof b.remaining === 'number' && b.remaining < 5;
+    return `<div class="bill api${back ? ' back' : ''}"><div class="bl-t">💳 ${esc(t('正在用 Claude API'))}</div><div class="bl-d">${esc(why)}</div>`
+      + `<div class="bl-m${low ? ' low' : ''}">${esc(billingLeft(b))}</div>${reset ? `<div class="bl-r">${esc(reset)}</div>` : ''}`
+      + `<button class="btn bl-btn${back ? ' primary' : ''}" data-bill="sub">${esc(t('切回訂閱'))}</button></div>`;
+  }
+  if (!b.hasKey) return '';
+  return `<div class="bill sub"><span class="t">${esc(t('API 備用已設定'))}${typeof b.remaining === 'number' ? ' · ' + esc(billingLeft(b)) : ''}</span>`
+    + `<button class="sess-reset" data-bill="api" title="${esc(t('不等額度用完，現在就改用 Claude API'))}">${esc(t('改用 API'))}</button></div>`;
+}
+async function switchBilling(mode) {
+  if (mode === 'api' && !await confirmBox(t('改用 Claude API？之後 Claude 每一輪都扣 API 額度，直到你切回訂閱。'))) return;
+  const r = await api.setBilling({ mode });
+  if (r?.error) return alertBox(t(r.error));
+  agentStatus = await api.agentStatus();
+  renderAgentPanel(); renderAgentInfo();
+}
 // session 大小：這個 Agent 在這個對話的 session 現在約多少 tokens（之後每一輪至少要重送這麼多）。
 // 主程序每輪跑完記在 conv.sizes，算法見 agents.js 的 sessionSize；超過 SESSION_WARN 就提醒重開
 const SESSION_WARN = 100000;
@@ -1262,7 +1293,7 @@ function renderAgentPanel() {
     return `<div class="acard ${mine.length ? 'busy' : ''}" data-agent="${a}">
       <div class="acard-head"><span class="badge ${a}">${INITIAL[a]}</span><span class="nm">${LABEL[a]}</span>
         <span class="st ${mine.length ? 'busy' : ''}">${mine.length ? (mine.length > 1 ? t('工作中 ×{n}', { n: mine.length }) : t('工作中')) : t('閒置')}</span></div>
-      ${model}${permBtnHtml(a)}${sessionHtml(a)}${quotaHtml(a)}${jobs}</div>`;
+      ${model}${permBtnHtml(a)}${billingHtml(a)}${sessionHtml(a)}${quotaHtml(a)}${jobs}</div>`;
   }).join('');
   const fin = agentStatus.finished.filter(j => j.convId === cid).slice(0, 12);
   const icon = { done: '✓', error: '✕', stopped: '■' };
@@ -1272,7 +1303,7 @@ function renderAgentPanel() {
       <div class="l2">${esc(t(j.activity))} · ${elapsed(j.endedAt - j.startedAt)} · ${ago(j.endedAt)}</div></div></li>`).join('')
     : `<li class="empty">${t('這個對話還沒有完成的工作')}</li>`;
 }
-api.on('agents:status', st => { agentStatus = st; renderAgentPanel(); });
+api.on('agents:status', st => { agentStatus = st; renderAgentPanel(); renderAgentInfo(); });
 
 // ---------- 右欄卡片：切換這個對話的模型與強度 ----------
 let modelMenuAgent = null, modelMenuMore = false, modelMenuKind = 'model';   // kind：model（模型與強度）或 perm（權限）
@@ -1342,6 +1373,8 @@ async function setConvAgentCfg(a, patch) {
   renderAgentPanel(); updateComposer();
 }
 $('#agentCards').addEventListener('click', e => {
+  const bill = e.target.closest('[data-bill]');
+  if (bill) return switchBilling(bill.dataset.bill);
   const reset = e.target.closest('.sess-reset');
   if (reset) return resetSession(reset.dataset.reset);
   const comp = e.target.closest('.sess-compress');
@@ -1655,6 +1688,7 @@ function syncForm() {
   form.defaultCwd = $('#setCwd').value.trim() || form.defaultCwd;
   form.delegation = $('#setDelegation').checked;
   form.context = $('#setContext').value;
+  form.claudeApi = { ...(form.claudeApi || {}), auto: $('#setApiAuto').checked, when: $('#setApiWhen').value };
   for (const sec of document.querySelectorAll('#agentSettings section')) {
     for (const f of sec.querySelectorAll('[data-k]')) form.agents[sec.dataset.agent][f.dataset.k] = f.type === 'checkbox' ? f.checked : f.value.trim();
   }
@@ -1704,6 +1738,7 @@ function openSettings(note) {
   $('#setCwd').value = form.defaultCwd;
   $('#setDelegation').checked = form.delegation;
   $('#setContext').value = form.context || 'standard';
+  renderApiGroup();
   openSecs = new Set();
   renderAgentSettings();
   $('#setMsg').textContent = note || '';
@@ -1712,6 +1747,47 @@ function openSettings(note) {
   for (const a of Object.keys(form.agents)) if (form.agents[a].enabled) checkCli(a);
 }
 function readSettingsForm() { syncForm(); return JSON.parse(JSON.stringify(form)); }
+
+// ---------- 設定：Claude API（備用） ----------
+// 金鑰和剩餘額度各有自己的按鈕、按了馬上存（金鑰不經過「儲存」整份設定，畫面也拿不到存好的金鑰）；
+// 自動切換與切換時機跟著「儲存」
+function renderApiGroup() {
+  const c = { auto: true, when: 'weekly', ...(form?.claudeApi || settings.claudeApi || {}) };
+  $('#apiKeyState').textContent = c.hasKey ? t('已設定（…{last4}）', { last4: c.last4 || '' }) : t('未設定');
+  $('#setApiKey').value = '';
+  $('#setApiAuto').checked = c.auto !== false;
+  $('#setApiWhen').value = c.when === 'any' ? 'any' : 'weekly';
+  const b = agentStatus.billing;
+  $('#setApiBase').value = typeof b?.remaining === 'number' ? b.remaining.toFixed(2) : '';
+  $('#clearApiKey').disabled = !c.hasKey;
+}
+// 存好金鑰後設定換成主程序回的版本：只換 claudeApi，其他還沒按「儲存」的欄位不動
+function applyApiResult(r, msg) {
+  if (r?.error) return alertBox(t(r.error));
+  settings.claudeApi = r.claudeApi;
+  if (form) form.claudeApi = { ...form.claudeApi, hasKey: r.claudeApi.hasKey, last4: r.claudeApi.last4 };
+  if (agentStatus.billing) agentStatus.billing.hasKey = r.claudeApi.hasKey;
+  renderApiGroup(); renderAgentPanel();
+  $('#setMsg').textContent = msg;
+}
+$('#saveApiKey').onclick = async () => {
+  const key = $('#setApiKey').value.trim();
+  if (!key) return;
+  applyApiResult(await api.setClaudeKey(key), t('已儲存 Claude API 金鑰'));
+};
+$('#clearApiKey').onclick = async () => {
+  if (!await confirmBox(t('清除 Claude API 金鑰？正在用 API 的話會切回訂閱。'))) return;
+  applyApiResult(await api.setClaudeKey(''), t('已清除 Claude API 金鑰'));
+};
+$('#saveApiBase').onclick = async () => {
+  const raw = $('#setApiBase').value.trim(), v = Number(raw);
+  if (raw && !(v >= 0)) return alertBox(t('請填 0 以上的金額'));
+  const r = await api.setBilling({ base: raw ? v : null });
+  if (r?.error) return alertBox(t(r.error));
+  agentStatus = await api.agentStatus();
+  renderApiGroup(); renderAgentPanel();
+  $('#setMsg').textContent = raw ? t('已更新 API 剩餘額度：{money}', { money: money(v) }) : t('已清掉 API 剩餘額度');
+};
 
 $('#openSettings').onclick = () => openSettings();
 $('#settingsModal').onclick = async e => {
