@@ -91,7 +91,7 @@ For a small fix, choose **No progress file**.
 
 The right panel shows the current chat only: whether each agent is idle or working, what it is doing, and work finished recently.
 
-- **Remaining usage** (5-hour and weekly): Claude updates after every reply, Codex is read every 5 minutes, Cursor does not report it.
+- **Remaining usage** (5-hour and weekly): Claude updates after every reply, Codex is read every 5 minutes, Cursor does not report it. When this chat's Claude uses Fable, a **Fable weekly** row appears: the Claude CLI reports it only on Fable turns (`seven_day_overage_included`, checked 2026-11-20), so it shows up after one Fable turn.
 - **Session size**: the tokens re-sent on every later turn at minimum, and the share of the model's context it uses (for example "session 511k/1M (51%)"). The size is exact for Claude and the context size is what Claude reports; Codex and Cursor sizes are estimates, with the context assumed to be 200k (marked "~").
 - **Compress suggestion**: when any agent uses 80% of its context, the card says it is near the limit and shows **Compress**, and a line above the input box suggests it too; one click compresses. Beyond that the CLI summarizes on its own or runs out of room, and earlier details get lost. After **Not now**, it comes back once that agent uses another 10%.
 - There is no **Restart** button: compress long chats to save usage. AgentDesk clears sessions by itself only when needed (an invalid session, Cursor moving from read-only to writable, after compressing).

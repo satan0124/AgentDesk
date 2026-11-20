@@ -91,7 +91,7 @@ flowchart LR
 
 右欄只看目前這個對話：每個 Agent 是閒置還是工作中、正在做什麼，以及最近完成的工作。
 
-- **剩餘額度**（5 小時、每週）：Claude 每次回覆後更新，Codex 每 5 分鐘讀一次，Cursor 沒有提供。
+- **剩餘額度**（5 小時、每週）：Claude 每次回覆後更新，Codex 每 5 分鐘讀一次，Cursor 沒有提供。這個對話的 Claude 用 Fable 時多一條「Fable 每週」：Claude CLI 只在 Fable 的回合回報這一項（`seven_day_overage_included`，2026-11-20 實測），所以要用 Fable 跑過一輪才會出現。
 - **session 大小**：之後每一輪至少要重送的 tokens，以及佔模型上下文的幾成（例如「session 511k／1M（51%）」）。Claude 的大小是準的，上下文大小照 Claude 回報的；Codex、Cursor 的大小是估的，上下文以 200k 估（標「~」）。
 - **建議壓縮**：任何一個 Agent 用到上下文的八成時，卡片標「接近上限，建議壓縮」、多一顆「壓縮」，輸入框上方也會提示，按「壓縮」就好。再大下去，CLI 會自己摘要或塞不下，前面的細節容易丟掉。按「先不要」之後，那個 Agent 再多用一成才會再提。
 - 沒有「重開」按鈕：長對話要省額度用壓縮。AgentDesk 只在需要時自己清掉 session（session 失效、Cursor 從唯讀切到可寫、壓縮完）。

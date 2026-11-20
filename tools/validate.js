@@ -233,7 +233,8 @@ async function unitTests() {
     const r = run('claude', [{ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', unifiedWindows: {
       five_hour: { utilization: 0.24, resetsAt: 100 }, seven_day: { utilization: 0.02, resetsAt: 200 }, seven_day_overage_included: { utilization: 0 } } } }]);
     const lim = r.evs.find(e => e.type === 'limits');
-    assert(lim && JSON.stringify(lim.windows) === JSON.stringify([{ kind: 'five_hour', used: 24, resetsAt: 100 }, { kind: 'seven_day', used: 2, resetsAt: 200 }]), JSON.stringify(lim));
+    // 另外的額度（用 Fable 時才有的 seven_day_overage_included）也留著，排在 5 小時、每週後面
+    assert(lim && JSON.stringify(lim.windows) === JSON.stringify([{ kind: 'five_hour', used: 24, resetsAt: 100 }, { kind: 'seven_day', used: 2, resetsAt: 200 }, { kind: 'seven_day_overage_included', used: 0 }]), JSON.stringify(lim));
     assert(!claudeWindows({}).length, '沒有資料時應該是空的');
     const cw = codexWindows({ primary: { usedPercent: 21, windowDurationMins: 300, resetsAt: 1 }, secondary: { usedPercent: 73, windowDurationMins: 10080, resetsAt: 2 } });
     assert(JSON.stringify(cw) === JSON.stringify([{ kind: 'five_hour', used: 21, resetsAt: 1 }, { kind: 'seven_day', used: 73, resetsAt: 2 }]), JSON.stringify(cw));
@@ -1195,8 +1196,8 @@ async function e2eTests() {
   await check('畫面：右欄卡片切換這個對話的模型與強度（不改設定）', () => { const m = r.convModel || {};
     assert(m.mainCount >= 5 && m.allCount >= 14 && m.picked === 'claude-sonnet-5-5' && m.effort === 'high' && m.info && m.reset && m.settingsKept && !m.menuCjk?.length,
       JSON.stringify(m)); });
-  await check('畫面：右欄額度條、只顯示目前對話的工作', () => { const q = r.quota || {};
-    assert(q.rows === 2 && /76/.test(q.text) && /10/.test(q.text) && q.low && !q.cjk && r.panelScoped, JSON.stringify({ ...q, scoped: r.panelScoped })); });
+  await check('畫面：右欄額度條（對話用 Fable 時多一條 Fable 每週）、只顯示目前對話的工作', () => { const q = r.quota || {};
+    assert(q.rows === 2 && /76/.test(q.text) && /10/.test(q.text) && q.low && !q.cjk && q.fable && q.fableCjk === false && r.panelScoped, JSON.stringify({ ...q, scoped: r.panelScoped })); });
   await check('畫面：設定頁 Claude 模型清單完整、Codex／Cursor 從新增 Agent 加入、沒有 Gemini', () => { const s = r.settingsModels || {};
     assert(s.claudeOptions >= 14 && s.presets?.includes('builtin:codex') && s.presets?.includes('builtin:cursor') && !s.presets?.includes('gemini') && !s.builtinShown?.length,
       JSON.stringify(s)); });
@@ -1224,7 +1225,7 @@ async function e2eTests() {
   await check('畫面：UX：沒用過的新對話沿用、不列出來；頂列「⋯」選單；模式選單；資訊列一行；視窗窄時收右欄、輸入框不爆框；設定頁每個 Agent 預設收起', () => { const u = r.ux || {};
     const [wide, mid1000, narrow, back] = u.layout || [];
     const lay = wide?.panel && wide.fits && !mid1000?.panel && mid1000.fits && !narrow?.panel && narrow.narrow && narrow.fits && narrow.main >= 400 && back?.panel && back.fits && !back.narrow;
-    assert(u.blankTop && u.blankHidden && u.blankReuse && u.blankShown && u.firstSkipsBlank && u.more && u.modeMenu && u.modeClosed && u.infoOneLine && lay && u.forced && u.folded && u.unfold
+    assert(u.blankTop && u.blankHidden && u.blankReuse && u.blankShown && u.firstSkipsBlank && u.toBottom && u.toBottomNew && u.toBottomGone && u.toBottomCjk === false && u.more && u.modeMenu && u.modeClosed && u.infoOneLine && lay && u.forced && u.folded && u.unfold
       && u.moreCjk === false && u.modeCjk === false && u.panelTip === false && u.foldCjk === false, JSON.stringify(u));
     return `主欄 ${(u.layout || []).map(l => l.main).join('／')}px`; });
   await check('畫面：Claude API 備用：額度用完自動改用 API 重跑同一則（做到一半就接著做）、訊息與卡片提示、剩餘額度、切回訂閱後先照用訂閱、一開始就切、關掉不切、金鑰不外露', () => { const b = r.billing || {};

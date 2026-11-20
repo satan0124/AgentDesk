@@ -291,6 +291,7 @@ function renderConv() {
   refreshWork();
   refreshWorkList();
   box.scrollTop = box.scrollHeight;
+  renderToBottom();
 }
 
 function renderMsg(m) {
@@ -492,10 +493,23 @@ function flush() {
     const node = box.querySelector(`.msg[data-id="${id}"]`);
     if (m && node) fillAssistant(node, m);
   }
+  const changed = renderQueue.size > 0;
   renderQueue.clear();
   updateComposer();
   if (stick) box.scrollTop = box.scrollHeight;
+  // 捲上去看舊訊息時有新內容：「回到最新」的按鈕亮起來
+  else if (changed) $('#toBottom').classList.add('new');
+  renderToBottom();
 }
+
+// ---------- 回到最新：捲上去離底部超過一段距離時，輸入框上方出現 ↓，按了捲回最下面 ----------
+function renderToBottom() {
+  const box = $('#messages'), away = box.scrollHeight - box.scrollTop - box.clientHeight > 240;
+  $('#toBottom').classList.toggle('hidden', !away);
+  if (!away) $('#toBottom').classList.remove('new');
+}
+$('#messages').addEventListener('scroll', renderToBottom, { passive: true });
+$('#toBottom').onclick = () => { const box = $('#messages'); box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }); $('#toBottom').classList.remove('new'); };
 
 api.on('conv:changed', async list => {
   await refreshList(list);
@@ -1195,7 +1209,10 @@ function ago(ts) {
   return s < 60 ? t('剛剛') : s < 3600 ? t('{m} 分鐘前', { m: Math.floor(s / 60) }) : s < 86400 ? t('{h} 小時前', { h: Math.floor(s / 3600) }) : new Date(ts).toLocaleDateString();
 }
 // 剩餘額度：Claude 每次回覆後更新、Codex 由 app-server 讀，Cursor CLI 沒有提供
-const WIN_LABEL = { five_hour: '5 小時', seven_day: '每週' };
+const WIN_LABEL = { five_hour: '5 小時', seven_day: '每週', seven_day_overage_included: 'Fable 每週' };
+// 只在這個對話的這個 Agent 用 Fable 時才顯示的額度（實測只有 Fable 的回合會回報，見 agents.js 的 claudeWindows）
+const FABLE_WINS = ['seven_day_overage_included'];
+const usesFable = a => /fable/i.test(`${effCfg(a).model || ''} ${modelName(a, effCfg(a).model || '')}`);
 function untilText(sec) {
   const m = Math.max(0, Math.round((sec * 1000 - Date.now()) / 60000));
   return m < 60 ? t('{m} 分鐘後', { m }) : m < 1440 ? t('{h} 小時 {m} 分後', { h: Math.floor(m / 60), m: m % 60 }) : t('{d} 天 {h} 小時後', { d: Math.floor(m / 1440), h: Math.floor(m % 1440 / 60) });
@@ -1204,7 +1221,8 @@ function quotaHtml(a) {
   if (a === 'cursor') return `<div class="quota note">${t('Cursor CLI 不提供剩餘額度')}</div>`;
   const q = agentStatus.limits?.[a];
   if (!q?.windows?.length) return a === 'claude' ? `<div class="quota note">${t('額度：Claude 回覆一次後顯示')}</div>` : a === 'codex' ? `<div class="quota note">${t('額度：還沒讀到')}</div>` : '';
-  return `<div class="quota">${q.windows.map(w => {
+  const fable = usesFable(a);
+  return `<div class="quota">${q.windows.filter(w => !FABLE_WINS.includes(w.kind) || fable).map(w => {
     const reset = w.resetsAt && w.resetsAt * 1000 < Date.now();   // 已過重置時間，舊數字不準，視為用量歸零
     const left = Math.max(0, 100 - (reset ? 0 : w.used));
     const tip = reset ? '' : w.resetsAt ? t('已用 {used}%，{when}重置', { used: w.used, when: untilText(w.resetsAt) }) : '';

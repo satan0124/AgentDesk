@@ -467,9 +467,12 @@ function turnUsage(r, prevRaw, resumed) {
 
 // ---------- 剩餘額度 ----------
 // 統一成 [{ kind: 'five_hour' | 'seven_day' | '<分鐘>m', used: 已用百分比, resetsAt: 重置時間（秒） }]
+// Claude 另外有的額度也留著，例如 seven_day_overage_included：2026-11-20 實測只有用 Fable 5.2 的回合才出現
+// （Haiku 的回合只有 five_hour、seven_day），畫面當成 Fable 的每週額度、只在這個對話用 Fable 時顯示（app.js 的 quotaHtml）
 function claudeWindows(info) {
   const w = info?.unifiedWindows || {};
-  const out = ['five_hour', 'seven_day'].filter(k => w[k])
+  const keys = ['five_hour', 'seven_day', ...Object.keys(w).filter(k => k !== 'five_hour' && k !== 'seven_day')];
+  const out = keys.filter(k => w[k] && typeof w[k] === 'object')
     .map(k => ({ kind: k, used: Math.round((w[k].utilization || 0) * 100), resetsAt: w[k].resetsAt }));
   if (!out.length && info?.rateLimitType && typeof info.utilization === 'number') {
     out.push({ kind: info.rateLimitType, used: Math.round(info.utilization * 100), resetsAt: info.resetsAt });

@@ -417,7 +417,9 @@ function setLimits(agent, { windows, plan }) {
   if (!windows?.length) return;
   // API 模式回報的不是訂閱的額度，不要蓋掉右欄記的訂閱額度
   if (usesApi(agent)) return;
-  limits[agent] = { windows, plan, at: Date.now() };
+  // 這一輪沒回報的額度（例如只有用 Fable 才有的那一項）沿用上一次記的，換模型聊時才不會不見；重置時間過了畫面當成歸零
+  const keep = (limits[agent]?.windows || []).filter(w => !windows.some(n => n.kind === w.kind));
+  limits[agent] = { windows: [...windows, ...keep], plan: plan || limits[agent]?.plan, at: Date.now() };
   try { fs.writeFileSync(LIMITS_FILE, JSON.stringify(limits)); } catch {}
   publishJobs();
 }

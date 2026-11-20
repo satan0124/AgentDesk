@@ -364,11 +364,18 @@
     info: info.includes('Sonnet 5.5') && info.includes('high'), reset: !c3.agentCfg?.claude?.model && c3.agentCfg?.claude?.effort === 'high',
     settingsKept: settings.agents.claude.model === baseModel && (await api.getSettings()).agents.claude.model === baseModel, menuCjk };
   await api.updateConv(id, { agentCfg: { claude: null } });
-  agentStatus.limits = { claude: { windows: [{ kind: 'five_hour', used: 24, resetsAt: Date.now() / 1000 + 3600 }, { kind: 'seven_day', used: 90, resetsAt: Date.now() / 1000 + 86400 }] } };
+  // Fable 的每週額度（seven_day_overage_included）只在這個對話的 Claude 用 Fable 時顯示
+  agentStatus.limits = { claude: { windows: [{ kind: 'five_hour', used: 24, resetsAt: Date.now() / 1000 + 3600 }, { kind: 'seven_day', used: 90, resetsAt: Date.now() / 1000 + 86400 },
+    { kind: 'seven_day_overage_included', used: 1, resetsAt: Date.now() / 1000 + 86400 }] } };
   renderAgentPanel();
   const qrows = [...document.querySelectorAll('#agentCards .acard[data-agent="claude"] .qrow')];
   out.quota = { rows: qrows.length, text: qrows.map(r => r.textContent).join(' | '), low: !!document.querySelector('#agentCards .qbar i.low'),
     cjk: CJK.test(qrows.map(r => r.textContent + r.title).join('')) };
+  current = await api.updateConv(current.id, { agentCfg: { claude: { model: 'claude-fable-5-2' } } }); renderAgentPanel();
+  const frows = [...document.querySelectorAll('#agentCards .acard[data-agent="claude"] .qrow')];
+  out.quota.fable = frows.length === 3 && frows[2].textContent.includes(t('Fable 每週')) && /99/.test(frows[2].textContent);
+  out.quota.fableCjk = CJK.test(frows.map(r => r.textContent).join(''));
+  current = await api.updateConv(current.id, { agentCfg: { claude: { model: null } } }); renderAgentPanel();
   const finBefore = document.querySelectorAll('#recentJobs li:not(.empty)').length;
   // 6b) 新對話：輸入框上方的資料夾選單（有訊息的對話不顯示）
   const pick = document.querySelector('#cwdPick');
@@ -721,7 +728,21 @@
   ux.modeCjk = CJK.test($('#modeMenu').innerText + $('#modeBtn').innerText + $('#modeBtn').title);
   document.body.click();
   ux.modeClosed = $('#modeMenu').classList.contains('hidden');
-  ux.infoOneLine = $('#agentInfo').scrollHeight <= 24 && !$('#agentInfo').textContent.includes(t('可委派給 {names}', { names: '' }).trim());
+  // 回到最新：捲到最上面時出現；捲上去時有新內容就亮起來；捲回底部就消失
+  {
+    const box = $('#messages'), tb = $('#toBottom'), pad = document.createElement('div');
+    pad.style.height = '3000px'; box.prepend(pad);
+    box.scrollTop = 0; box.dispatchEvent(new Event('scroll'));
+    ux.toBottom = !tb.classList.contains('hidden') && !tb.classList.contains('new');
+    const lastA = current.messages.findLast(m => m.role === 'assistant');
+    if (lastA) { renderQueue.add(lastA.id); flush(); }
+    ux.toBottomNew = !!lastA && tb.classList.contains('new') && box.scrollTop < 10;
+    ux.toBottomCjk = CJK.test(tb.title);
+    box.scrollTop = box.scrollHeight; box.dispatchEvent(new Event('scroll'));
+    ux.toBottomGone = tb.classList.contains('hidden') && !tb.classList.contains('new');
+    pad.remove(); renderToBottom();
+  }
+  ux.infoOneLine =$('#agentInfo').scrollHeight <= 24 && !$('#agentInfo').textContent.includes(t('可委派給 {names}', { names: '' }).trim());
   const lay = w => {
     document.body.style.width = w ? w + 'px' : ''; fitLayout();
     const box = $('.composer-box').getBoundingClientRect();
