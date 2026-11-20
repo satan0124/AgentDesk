@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
   pathOf: file => { try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
   pickFiles: () => ipcRenderer.invoke('dialog:files'),
   stop: convId => ipcRenderer.invoke('chat:stop', convId),
+  retry: convId => ipcRenderer.invoke('chat:retry', convId),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: s => ipcRenderer.invoke('settings:set', s),
   setClaudeKey: key => ipcRenderer.invoke('claudeApi:key', key),

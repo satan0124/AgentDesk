@@ -312,6 +312,10 @@ function fillAssistant(node, m) {
   if (m.status === 'running') html += `<div class="working"><span class="spinner"></span>${runningLabel(m)}</div>`;
   if (m.status === 'error' && m.error) html += `<div class="errbox">${esc(t(m.error))}</div>${reloginHtml(m.agent, m.error)}${pickModelHtml(m.agent, m.error)}`;
   if (m.status === 'stopped') html += `<div class="stopped">■ ${esc(t(m.error || '已停止'))}</div>`;
+  // 最後一則出錯或停止：可以用同樣的話再送一次（例如重新登入之後）
+  if ((m.status === 'error' || m.status === 'stopped') && current?.messages.at(-1)?.id === m.id) {
+    html += `<button class="btn retry" data-retry title="${esc(t('用同樣的話、同樣的對象再送一次，這一則會被取代'))}">↻ ${esc(t('重試'))}</button>`;
+  }
   // 對話模式下 Agent 想改檔：只在最後一則訊息上問，顯示與否由 renderMode 依目前模式決定
   if (m.needWork && current?.messages.at(-1)?.id === m.id) {
     html += `<div class="need-work hidden"><div class="nw-text">${esc(t('{name} 需要修改檔案，但對話模式是唯讀的。', { name: LABEL[m.agent] }))}</div>${m.needWork.denied?.length ? `<div class="nw-list">${m.needWork.denied.map(esc).join('<br>')}</div>` : ''}<button class="btn primary" data-act="toWork">${esc(t('切到工作模式並繼續'))}</button></div>`;
@@ -978,10 +982,19 @@ $('#messages').addEventListener('click', e => {
   if (btn) showModelMenu(a, btn);
 });
 $('#messages').addEventListener('click', async e => {
+  if (e.target.closest('[data-retry]')) {
+    if (!current || isRunning()) return;
+    const id = current.id, r = await api.retry(id);
+    if (r?.error) return alertBox(t(r.error));
+    // 主程序拿掉了那兩則再送：訊息數可能跟原本一樣，事件處理不會自己重讀，這裡先重讀
+    const c = await api.getConv(id);
+    if (current?.id === id && c) { current = c; renderConv(); }
+    return;
+  }
   const b = e.target.closest('[data-relogin]');
   if (!b) return;
   const a = b.dataset.relogin;
-  try { await api.cliLogin(a, settings.agents[a]); b.textContent = t('已開啟登入視窗，完成後回來重新送出。'); b.disabled = true; }
+  try { await api.cliLogin(a, settings.agents[a]); b.textContent = t('已開啟登入視窗，登入完成後按「重試」。'); b.disabled = true; }
   catch (err) { alertBox(t(String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))); }
 });
 

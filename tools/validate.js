@@ -1249,6 +1249,8 @@ async function e2eTests() {
     assert(Object.values(p.md || {}).every(Boolean) && Object.values(p.html || {}).every(Boolean) && p.closed && p.noFrame && p.cjk === false, JSON.stringify(p)); });
   await check('畫面：執行中逐項核准：出現核准卡片，按允許／拒絕 Agent 拿到對應的答案；等待中按停止一律拒絕', () => { const a = r.approval || {};
     assert(a.allow && a.deny && a.stop && a.resolved && a.cjk === false, JSON.stringify(a)); });
+  await check('畫面：最後一則停止或出錯時有「重試」，按了用同樣的話與對象重送、取代那一輪；正常完成的不能重試', () => { const r2 = r.retry || {};
+    assert(r2.stopped && r2.btn && r2.cjk === false && r2.replaced && r2.shown && r2.refuseDone, JSON.stringify(r2)); });
   await check('畫面：回合或委派還沒結束就刪掉對話，3 秒後對話、存檔、逐字稿都沒有回來', () => { const m = r.midDelete || {};
     const back = c => !!c?.id && (fs.existsSync(path.join(data, 'conversations', `${c.id}.json`)) || fs.existsSync(path.join(data, 'transcripts', c.id)));
     assert(m.turn?.started && m.turn.gone && !back(m.turn) && m.delegate?.started && m.delegate.delegated && m.delegate.gone && !back(m.delegate), JSON.stringify(m)); });

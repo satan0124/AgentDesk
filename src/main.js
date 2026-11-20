@@ -969,6 +969,22 @@ ipcMain.handle('att:add', (_, items) => addAttachments(items || []));
 ipcMain.handle('chat:send', (_, convId, agent, text, atts) => {
   startTurn(convId, agent, text, atts).catch(err => send('chat:error', { convId, error: err.message }));
 });
+// 重試最後一輪（出錯或停止的那一則，例如重新登入之後）：拿掉那一則和它前面的使用者訊息，用同樣的話、附件、對象再送一次。
+// 索引涵蓋到被拿掉的那兩則時往回縮，之後的新訊息才不會被當成已經進索引
+ipcMain.handle('chat:retry', (_, convId) => {
+  const c = getConv(convId);
+  if (!c) return { error: tr('找不到對話') };
+  if (running.has(convId)) return { error: tr('這個對話還在執行中') };
+  const a = c.messages.at(-1), u = c.messages.at(-2);
+  if (a?.role !== 'assistant' || !['error', 'stopped'].includes(a.status) || u?.role !== 'user') return { error: tr('沒有可以重試的回合') };
+  // startTurn 一開始會擋的情況先擋：訊息拿掉之後才失敗，使用者的話就不見了
+  if (!settings.agents[u.agent]?.enabled) return { error: tr('{name} 還沒加入，請到設定加入', { name: labelOf(u.agent) }) };
+  if (!fs.existsSync(c.cwd)) return { error: tr('工作資料夾不存在：{cwd}', { cwd: c.cwd }) };
+  c.messages.splice(-2, 2);
+  if ((c.indexed || 0) > c.messages.length) c.indexed = c.messages.length;
+  startTurn(convId, u.agent, u.text || '', u.attachments || []).catch(err => send('chat:error', { convId, error: err.message }));
+  return { ok: true };
+});
 ipcMain.handle('chat:stop', (_, convId) => { const ctx = running.get(convId); if (ctx) for (const s of ctx.stops) s(); });
 ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('settings:set', (_, s) => {

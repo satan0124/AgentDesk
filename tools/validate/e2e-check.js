@@ -680,6 +680,29 @@
     return { id: hc.id, started, delegated, gone: !(await api.getConv(hc.id)) && !(await api.listConvs()).some(x => x.id === hc.id) };
   };
   out.midDelete = { turn: await holdCase('xslow', () => 'hold'), delegate: await holdCase('xhold', id => `delegate xslow ${id}`) };
+  // 7h2) 重試：最後一則停止或出錯時有「重試」，按了拿掉那一輪、用同樣的話與對象再送一次（訊息數不變、換成新的一則）；
+  //      最後一則正常完成時主程序不接受重試
+  {
+    const rtc = await api.createConv(current.cwd);
+    await openConv(rtc.id);
+    const runningNow = async () => !!(await api.listConvs()).find(x => x.id === rtc.id)?.running;
+    await api.send(rtc.id, 'xslow', 'retry me');
+    for (let i = 0; i < 40 && !(await runningNow()); i++) await wait(250);
+    await api.stop(rtc.id);
+    const r1 = await waitTurn(rtc.id, 2);
+    current = r1; renderConv(); flush();
+    const rbtn = document.querySelector('#messages [data-retry]');
+    const oldId = r1.messages.at(-1).id;
+    rbtn?.click();
+    for (let i = 0; i < 40 && !(await runningNow()); i++) await wait(250);
+    const r2 = await api.getConv(rtc.id);
+    out.retry = { stopped: r1.messages.at(-1).status === 'stopped', btn: !!rbtn, cjk: CJK.test((rbtn?.textContent || '') + (rbtn?.title || '')),
+      replaced: r2.messages.length === 2 && r2.messages[0].text === 'retry me' && r2.messages[0].agent === 'xslow' && r2.messages[1].id !== oldId,
+      shown: current.id === rtc.id && current.messages.at(-1)?.id === r2.messages[1].id };
+    await api.stop(rtc.id); await waitTurn(rtc.id, 2);
+    out.retry.refuseDone = !!(await api.retry(mid))?.error;
+    await openConv(mid); await api.deleteConv(rtc.id);
+  }
   // 7i) 執行中逐項核准：xhold 像 Claude 的 --permission-prompt-tool 一樣打 /approve → 訊息裡出現核准卡片；
   //     按允許／拒絕，Agent 拿到對應的答案；等待中按停止，一律拒絕、回合結束
   const apConv = await api.createConv(current.cwd);

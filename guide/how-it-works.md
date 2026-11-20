@@ -35,6 +35,8 @@ If another chat in the same folder is running in work mode, AgentDesk asks befor
 
 Pick the working folder from the folder menu above the input box before the first message. After that it stays fixed: the top bar shows only the folder name, and clicking it opens the folder in File Explorer. Pin, rename, archive and delete are in the ⋯ menu in the top bar, and in the sidebar's right-click menu.
 
+When the latest reply failed or was stopped (for example after logging in again), **Retry** below it removes that turn and sends the same message, attachments and agent again.
+
 ## Shared context
 
 Each chat remembers every agent's session. When you talk to an agent, whatever it has not seen from the other agents is sent with your message. That text counts toward the agent's usage, so it is capped by **Context to include** in Settings: Lean (about 6,000 characters), Standard (16,000, the default) or Full (40,000). Past the cap, the newest messages and the first request of the chat are kept. Each reply shows how many characters were sent with it.
